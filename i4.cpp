@@ -30,7 +30,7 @@ void test3() {
   std::locale("ja_JP.EUC-JP");
 }
 
-void use_libstdcxx_locale_patch();
+int use_libstdcxx_locale_patch();
 
 int main() {
   use_libstdcxx_locale_patch();

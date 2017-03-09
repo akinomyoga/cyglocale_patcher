@@ -1,46 +1,82 @@
-//
-// 経緯
-//
-// Cygwin では std::locale("") すると std::runtime_error になる。
-// setlocale(LC_ALL, ""); は普通にできるのに納得がいかない。
-//
-// 問題がページ [1] に書かれているのと同じだとすれば、
-// libstdc++-v3/config/generic/c_locale.cc [2] が使われているのがいけない。
-// libstdc++-v3/config/gnu/c_locale.cc [3] の内容を使うようにすれば良い。
-// 問題の関数は cygstdc++-6.dll の中に入っている。
-// この DLL を適切な ./configure オプションでビルドし直して、
-// ソースコードを cygstdc++-6.dll と一緒に配布すれば良い気もするが、何か嫌だ。
-// 実のところ該当する関数だけ置き換えてリンクしてしまえば良いのではと考える。
-//
-// 所が、スタックトレースを見ると問題の関数は DLL (/usr/bin/cygstdc++-6.dll) の中で呼び出されている。
-//
-//   #12 0x498292c3 in cygstdc++-6!_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_ () from /usr/bin/cygstdc++-6.dll
-//   #13 0x49827569 in cygstdc++-6!_ZNSt6locale5_ImplC2EPKcj () from /usr/bin/cygstdc++-6.dll
-//   #14 0x49829ca8 in cygstdc++-6!_ZNSt6localeC2EPKc () from /usr/bin/cygstdc++-6.dll
-//   #15 0x0040129a in main () at hello.cpp:20
-//
-// 問題の関数を内部で呼び出しているような関数は DLL から沢山エクスポートされている。
-// それらを全て置き換えるのは非現実的だ。
-// 仕方がないので関数の実体を動的に書き換える事にする。以下の関数を置き換える。x
-//
-// - std::locale::facet::_S_create_c_locale(int*&, char const*, int*)
-// - std::locale::facet::_S_destroy_c_locale(int*&)
-// - std::locale::facet::_S_clone_c_locale(int*&)
-// - std::locale::facet::_S_lc_ctype_c_locale(int*, char const*)
-//
-// 実際に置き換えてみるとエラーが発生する。
-// 幾つかの箇所で未初期化の変数を _S_destroy_c_locale に渡している事が判明した。
-// 問題が発生しないように未初期化の変数をちゃんと初期化する様に、以下の関数にも修正が必要だった。
-//
-// - std::__timepunct<char>::_M_initialize_timepunct(int*)
-// - std::ctype<char>::ctype(int*, char const*, bool, unsigned int)
-// - std::ctype<char>::ctype(char const*, bool, unsigned int)
-//
-//
-// [1] http://d.hatena.ne.jp/eagletmt/20090208/1234086332
-// [2] https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/config/locale/generic/c_locale.cc#L220
-// [3] https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/config/locale/gnu/c_locale.cc#L132
-//
+/*?lwiki
+ *
+ * *概要
+ *
+ * Cygwin で `std::locale("")` や `std::locale("ja_JP.UTF-8")` をする。
+ *
+ * *使い方
+ *
+ * DLL は以下のようにして生成する。
+ * &pre(!bash){
+ * g++ -shared -O2 -s -o libstdcxx_locale_patch.dll i4dll.cpp
+ * }
+ *
+ * プログラムの中では `use_libstdcxx_locale_patch()` (ダミーの関数) を何処かで呼び出す様にする。
+ * &pre(!cpp,title=program.cpp){
+ * int use_libstdcxx_locale_patch();
+ * int main() {
+ *   use_libstdcxx_locale_patch(); // 何処かで呼び出す。
+ * }
+ * }
+ *
+ * コンパイル時は `libstdcxx_locale_patch.dll` をリンクする。
+ * &pre(!bash){
+ * g++ -L . program.cpp -lstdcxx_locale_patch
+ * }
+ * 実行時は `libstdcxx_locale_patch.dll` が見つかる様にする。
+ * コンパイル時に `-Wl,-RPATH,場所` を指定するか、
+ * 環境変数 `LD_LIBRARY_PATH=場所:...` を指定するか、
+ * 実行ファイルと同じディレクトリに .dll を置く。
+ *
+ * *経緯
+ *
+ * Cygwin では `std::locale("")` すると `std::runtime_error` になる。
+ * `setlocale(LC_ALL, "");` は普通にできるのに納得がいかない。
+ *
+ * 問題がページ [1] に書かれているのと同じだとすれば、
+ * libstdc++-v3/config/generic/c_locale.cc [2] が使われているのがいけない。
+ * libstdc++-v3/config/gnu/c_locale.cc [3] の内容を使うようにすれば良い。
+ * 問題の関数は cygstdc++-6.dll の中に入っている。
+ * この DLL を適切な ./configure オプションでビルドし直して、
+ * ソースコードを cygstdc++-6.dll と一緒に配布すれば良い気もするが、何か嫌だ。
+ * 実のところ該当する関数だけ置き換えてリンクしてしまえば良いのではと考える。
+ *
+ * 所が、スタックトレースを見ると問題の関数は DLL (/usr/bin/cygstdc++-6.dll) の中で呼び出されている。
+ *
+ *   #12 0x498292c3 in cygstdc++-6!_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_ () from /usr/bin/cygstdc++-6.dll
+ *   #13 0x49827569 in cygstdc++-6!_ZNSt6locale5_ImplC2EPKcj () from /usr/bin/cygstdc++-6.dll
+ *   #14 0x49829ca8 in cygstdc++-6!_ZNSt6localeC2EPKc () from /usr/bin/cygstdc++-6.dll
+ *   #15 0x0040129a in main () at hello.cpp:20
+ *
+ * 問題の関数を内部で呼び出しているような関数は DLL から沢山エクスポートされている。
+ * それらを全て置き換えるのは非現実的だ。
+ * 仕方がないので関数の実体を動的に書き換える事にする。以下の関数を置き換える。
+ *
+ * - `std::locale::facet::_S_create_c_locale(int*&, char const*, int*)`
+ * - `std::locale::facet::_S_destroy_c_locale(int*&)`
+ * - `std::locale::facet::_S_clone_c_locale(int*&)`
+ * - `std::locale::facet::_S_lc_ctype_c_locale(int*, char const*)`
+ *
+ * 実際に置き換えてみるとエラーが発生する。
+ * 幾つかの箇所で未初期化の値を `_S_destroy_c_locale` に渡している事が判明した。
+ * これにより自分の確保した `locale_t` ではない壊れた `locale_t` が渡って問題になる。
+ * 問題が発生しないように未初期化の変数をちゃんと初期化する様に、以下の関数にも修正が必要だった。
+ *
+ * - `std::__timepunct<char>::_M_initialize_timepunct(int*)`
+ * - `std::ctype<char>::ctype(int*, char const*, bool, unsigned int)`
+ * - `std::ctype<char>::ctype(char const*, bool, unsigned int)`
+ *
+ * しかしそれでも自前でビルドした DLL にしか有効でなかった。
+ * Cygwin に付属の DLL では未だ未初期化の変数が残るようで segfault する。
+ * 仕方がないので USE_LOCOBJ_COUNT というマクロを用意して、
+ * このマクロが定義されている時は自分で確保したオブジェクトを記録する事にした。
+ *
+ *
+ * [1] [[http://d.hatena.ne.jp/eagletmt/20090208/1234086332]]
+ * [2] [[https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/config/locale/generic/c_locale.cc#L220]]
+ * [3] [[https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/config/locale/gnu/c_locale.cc#L132]]
+ *
+ */
 
 #include <stdio.h>
 #include <locale.h>
@@ -55,37 +91,88 @@
 # endif
 #endif
 
-//#define debug1
+/*?lwiki
+ * @def #define USE_LOCOBJ_COUNT
+ *
+ * libstdc++-v3 自体に未初期化の変数を destroy に渡すという問題がある。
+ * `USE_LOCOBJ_COUNT` を定義すると、対策として `_S_create_c_locale` で生成した `locale_t` を記録し、
+ * `_S_destroy_c_locale` では記録されている `locale_t` のみを削除するようにする。
+ * 然しこの方法は完全ではない。たまたま仕様中の `locale_t` が未初期化の値に入っている可能性もあり、
+ * その場合、未だ仕様中の `locale_t` が削除されてしまうという事態になり危険である。
+ *
+ * `USE_LOCOBJ_COUNT` が定義されていない場合は、既知の未初期化の原因の関数について上書きを行う。
+ * しかし、この方法は自前で生成した cygstdc++-6.dll に対しては有効であったが、
+ * どうやら Cygwin 付属の cygstdc++-6.dll に対しては有効ではないようだ。
+ * 恐らく生成に使っているソースコードが違っていて、
+ * 別の箇所でも未初期化のデータが生産されているという事になる。
+ *
+ * ''libstdc++v3 の問題''
+ *
+ * もっと書くと Cygwin の構成では `ctype::_M_c_locale_ctype` 及び、
+ * `__timepunct::_M_c_locale_timepunct` が未初期化のまま
+ * `locale::facet::_S_destroy_c_locale` に渡されるが、
+ * `_S_destroy_c_locale` 自体が空の実装なので何も起こらないという事である。
+ * しかし、ここで `_S_destroy_c_locale` を置き換えると問題になるのである。
+ *
+ */
+#define USE_LOCOBJ_COUNT
+
+/*?lwiki
+ * @def #define USE_PRINT_ALLOC
+ *
+ * 定義されている時、`_S_destroy_c_locale` に変な値が渡される問題をデバグする為に、
+ * `locale_t` の確保・解放を逐一出力する事を示す。
+ *
+ */
+//#define USE_PRINT_ALLOC
+
+#ifdef USE_LOCOBJ_COUNT
+# if __cplusplus >= 201103L
+#  include <unordered_set>
+static std::unordered_set<locale_t> allocatedList;
+# else
+#  include <set>
+static std::set<locale_t> allocatedList;
+# endif
+#endif
 
 namespace std {
 
   void locale::facet::_S_create_c_locale(__c_locale& locobj, const char* locstr, __c_locale base) {
     if (!(locobj = (__c_locale) ::newlocale(1 << LC_ALL, locstr, (::locale_t) base)))
       throw std::runtime_error("std::locale::facet::_S_create_c_locale(__c_local, const char*, __clocale): failed");
-#ifdef debug1
+#ifdef USE_LOCOBJ_COUNT
+    allocatedList.insert((locale_t) locobj);
+#endif
+#ifdef USE_PRINT_ALLOC
     std::fprintf(stderr, "new %p\n", locobj);
     std::fflush(stderr);
 #endif
   }
 
   void locale::facet::_S_destroy_c_locale(__c_locale& locobj) {
-#ifdef debug1
-    std::fprintf(stderr, "free %p\n", locobj);
-    std::fflush(stderr);
+    if (locobj && _S_get_c_locale() != locobj) {
+#ifdef USE_LOCOBJ_COUNT
+      if (allocatedList.erase((locale_t) locobj) == 0) return;
 #endif
-    if (locobj && _S_get_c_locale() != locobj)
+#ifdef USE_PRINT_ALLOC
+      std::fprintf(stderr, "free %p\n", locobj);
+      std::fflush(stderr);
+#endif
       ::freelocale((::locale_t) locobj);
+    }
   }
 
   __c_locale locale::facet::_S_clone_c_locale(__c_locale& locobj) throw() {
-#ifdef debug1
     ::locale_t const result = ::duplocale((::locale_t) locobj);
+#ifdef USE_LOCOBJ_COUNT
+    allocatedList.insert(result);
+#endif
+#ifdef USE_PRINT_ALLOC
     std::fprintf(stderr, "dup %p\n", result);
     std::fflush(stderr);
-    return (__c_locale) result;
-#else
-    return (__c_locale) ::duplocale((::locale_t) locobj);
 #endif
+    return (__c_locale) result;
   }
 
   __c_locale locale::facet::_S_lc_ctype_c_locale(__c_locale locobj, const char* locstr) {
@@ -100,7 +187,10 @@ namespace std {
       throw std::runtime_error("std::locale::facet::_S_lc_ctype_c_locale(__clocale, const char*): failed in newlocale");
     }
 
-#ifdef debug1
+#ifdef USE_LOCOBJ_COUNT
+    allocatedList.insert(result);
+#endif
+#ifdef USE_PRINT_ALLOC
     std::fprintf(stderr, "ctype %p\n", result);
     std::fflush(stderr);
 #endif
@@ -300,11 +390,20 @@ namespace {
     if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet17_S_clone_c_localeERPi"       )) error_exit("_S_clone_c_locale");
     if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  ), false) error_exit("_S_lc_ctype_c_locale");
 
+#ifdef USE_LOCOBJ_COUNT
+    // USE_LOCOBJ_COUNT であっても、しないよりはする方がまし。
+    patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt11__timepunctIcE23_M_initialize_timepunctEPi");
+    patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPiPKcbj");
+    patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPiPKcbj");
+    patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPKcbj"  );
+    patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPKcbj"  );
+#else
     if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt11__timepunctIcE23_M_initialize_timepunctEPi")) error_exit("__timepunct::__timepunct");
     if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPiPKcbj")) error_exit("ctype::ctype");
     if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPiPKcbj")) error_exit("ctype::ctype");
     if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPKcbj"  )) error_exit("ctype::ctype");
     if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPKcbj"  )) error_exit("ctype::ctype");
+#endif
   }
 }
 
@@ -317,4 +416,4 @@ extern "C" BOOL WINAPI DllMain(HMODULE hinstDLL, DWORD fdwReason, LPVOID lpvRese
   return TRUE;
 }
 
-void use_libstdcxx_locale_patch() {}
+int use_libstdcxx_locale_patch() {return 0;}

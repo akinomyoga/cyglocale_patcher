@@ -1,6 +1,47 @@
 
 
 
+まとめ
+
+* C++ で std::locale("") すると死んでしまう
+
+  [libstdc++ のロケール問題 - EAGLE 雑記](http://d.hatena.ne.jp/eagletmt/20090208/1234086332)
+
+  上記によると ./configure オプションを指定しないと殆ど空の locale (generic) が選択される。
+  実際に Cygwin 上で ./configure に --enable-clocale=gnu 等の値を指定しても、
+  結局 configure のテストに失敗するので最終的には generic が指定されて変わらない。
+
+  * libstdc++-v3 を修正してビルドするという方法
+
+    実のところ Cygwin では C 言語レベルの locale の機能は揃っているので、
+    locale は generic ではなくて gnu でも良いはずである。
+    generic の _S_create_c_locale 周りを gnu を参考にして
+    修正すれば形式上色々の locale で動く様になる。
+
+    但し未初期化の変数があってそれを用いて _S_destroy_c_locale を呼び出している箇所があるので、
+    未初期化の部分を 0 などで上書きする様に修正を行わなければならない。
+    これにより一応 (文字コード変換だけは) 動く cygstdc++-6.dll を作成することが可能である。
+
+    これについては後でビルド用のスクリプトでも作ると良い。
+
+  * hot patching をするという事
+
+    libstdc++-v3 に対する修正を元にして hot patch を作成する。
+    しかし自前でビルドした cygstdc++-6.dll に対する patching はうまく行くが、
+    Cygwin についてくる cygstdc++-6.dll に対する patching はうまく行かない。
+    何回か std::locale(...) すると seg fault になる。
+
+    自前でビルドした cygstdc++-6.dll と Cygwin についてくる cygstdc++-6.dll は
+    公開されているエントリーポイントが異なる様である。それを無視しても segfault になる。
+    不思議なのは _ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc が Cygwin 付属の
+    cygstdc++-6.dll にちゃんと含まれている様に見えるのに実際に GetProcAddress しようとすると
+    失敗するという事である…。もしかすると何か変な dll を読み込んでいるだろうか。
+
+    うーん仕方がないのでそれまでに生成したオブジェクトのアドレスを全て記録する事にするか。
+
+------------------------------------------------------------------------------
+  Done
+------------------------------------------------------------------------------
 
 * C++ で std::locale("") すると死んでしまう件について。
 
@@ -43,10 +84,11 @@
   という訳で std::locale::_Impl::_Impl について、またソースコードを探しに行く。
   と思ったが実際には全ての _S_create_c_locale に対して置き換えを実行しなければならない。
   うーん。或いは、バイナリレベルで置き換えてしまう? つまり API Hook を行う。
+
+* hot patching (JMP interception) で置き換えを試す。
   
   よくあるのは IAT 書き換えである…と思ったけれど、
   それだと cygstdc++-6 の内部リンケージにまで影響を与える事ができない。
-
 
   うーん。cygstdc++-6.dll の中身を除いてみる。
     $ objdump -d -M intel /usr/bin/cygstdc++-6.dll > cygstdc++6.s
@@ -165,6 +207,8 @@
   という事は何か有限の値が free に渡されている時点で初期化順序の問題ではない。
   だとすると何かが壊れている事によってこれが起こっている…。
 
+
+* libstdc++-6 を修正してコンパイルするという事。
 
   うーん。面倒なのでやはり gcc-5.4 から libstdc++-6 をコンパイルするか。。
   ダウンロードして libstdc++-v3 ディレクトリの下で configure したらすぐにコンパイルできる様な雰囲気である。
@@ -336,35 +380,37 @@
     src/c++11/ctype_configure_char.cc の ctype コンストラクタ x 2 と、
     include/bits/time_members.h の __timepunct コンストラクタ x 3 である。
 
-    ヘッダに存在しているコンストラクタ __timepunct の hot patch は作れない。
-    インライン展開されて様々な所に転移しているからである。
-    コンストラクタから呼び出している _M_initialize_timepunct をいじれば良いだろう。
-    - _M_initialize_timepunct は 3 つのコンストラクタの何れからも呼び出される。
-    - _M_initialize_timepunct は src/c++98/time_members.cc で定義されている。
-      これは実際にはシステムに依って色々の内容になっている。
+* libstdc++-v3 を修正したのと同様の修正を hot patch で作る。
 
-      a 一番良いのは gnu の実装で上書きしてしまうことだが色々な怪しい関数を呼び出しているので
-        これが cygwin の上で通るかどうかはわからない。面倒なので試さない。
+  ヘッダに存在しているコンストラクタ __timepunct の hot patch は作れない。
+  インライン展開されて様々な所に転移しているからである。
+  コンストラクタから呼び出している _M_initialize_timepunct をいじれば良いだろう。
+  - _M_initialize_timepunct は 3 つのコンストラクタの何れからも呼び出される。
+  - _M_initialize_timepunct は src/c++98/time_members.cc で定義されている。
+    これは実際にはシステムに依って色々の内容になっている。
 
-      b 次に良い方法は既存の関数の中身はそのままにして、
-        関数呼び出しの前に介入をする事である。
-        これは既存の処理を変更する事による不整合を防ぐという意味で良い。
+    a 一番良いのは gnu の実装で上書きしてしまうことだが色々な怪しい関数を呼び出しているので
+      これが cygwin の上で通るかどうかはわからない。面倒なので試さない。
 
-      c 最後の方法は完全に上書きしてしまうという方法である。
+    b 次に良い方法は既存の関数の中身はそのままにして、
+      関数呼び出しの前に介入をする事である。
+      これは既存の処理を変更する事による不整合を防ぐという意味で良い。
 
-    取り敢えずは b の方法が可能かどうかについて考えてみる。
+    c 最後の方法は完全に上書きしてしまうという方法である。
 
-    - 先ず __timepunct の定義されている bits/locale_facets_nonio.h ヘッダは公開されているだろうか。
-      /usr/lib/gcc/i686-pc-cygwin/5.4.0/include/c++/bits/locale_facets_nonio.h に存在している。
-      従って、自分で憶測のヘッダを作ったりする必要性はない。
+  取り敢えずは b の方法が可能かどうかについて考えてみる。
 
-    - 上書きする関数 _M_initialize_timepunct は protected なので、
-      std::__timepunct<char> から派生すれば見える。
+  - 先ず __timepunct の定義されている bits/locale_facets_nonio.h ヘッダは公開されているだろうか。
+    /usr/lib/gcc/i686-pc-cygwin/5.4.0/include/c++/bits/locale_facets_nonio.h に存在している。
+    従って、自分で憶測のヘッダを作ったりする必要性はない。
 
-    - 関数自体は手元でコンパイルが通る。
+  - 上書きする関数 _M_initialize_timepunct は protected なので、
+    std::__timepunct<char> から派生すれば見える。
 
-    多分できそうだ。一回 a で実装してから b に移行する方向で考える。
-    一旦ここで repository にして保存する事にする。
+  - 関数自体は手元でコンパイルが通る。
+
+  多分できそうだ。一回 a で実装してから b に移行する方向で考える。
+  一旦ここで repository にして保存する事にする。
 
 
   * _M_initialize_timepunct 置き換え関数を実装する。
@@ -415,6 +461,6 @@
     →できた。よく考えたら DLL にしてしまえば GetProcAddress で
     どの関数のアドレスでも取得できるので、protected がどうだとか考える必要はなかった。
 
-    さて、これを使って動かしてみると自前でコンパイルした cygstdc++-6 では動作する様になった。
-    然し、cygwin に付属してくる cygstdc++-6.dll で動かしてみると依然として segfault する。
-    うーん。
+  さて、これを使って動かしてみると自前でコンパイルした cygstdc++-6 では動作する様になった。
+  然し、cygwin に付属してくる cygstdc++-6.dll で動かしてみると依然として segfault する。
+  うーん。

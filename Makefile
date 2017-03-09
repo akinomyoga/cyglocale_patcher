@@ -22,7 +22,7 @@ impl2.exe: impl2.o
 	g++ -g -L . -o $@ $^ -limpl2
 
 all: libstdcxx_locale_patch.dll i4.exe
-libstdcxx_locale_patch.dll: i4dll.o
-	g++ -g -shared -o $@ $^
+libstdcxx_locale_patch.dll: i4dll.cpp
+	g++ -O2 -s -shared -o $@ $<
 i4.exe: i4.o | libstdcxx_locale_patch.dll
 	g++ -g -L . -o $@ $^ -lstdcxx_locale_patch
