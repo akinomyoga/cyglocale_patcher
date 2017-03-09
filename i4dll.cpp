@@ -279,31 +279,32 @@ namespace {
   static void error_throw() {
     throw std::runtime_error("failed to patch libstdc++-6 locale");
   }
-  static void error_exit() {
+  static void error_exit(const char* name) {
     // 中途半端な状態で失敗したらもう死ぬしか無い。
-    std::fprintf(stderr, "failed to patch libstdc++-6 locale; exiting\n");
+    std::fprintf(stderr, "libstdcxx_locale_patch (%s): failed to patch; exiting\n", name);
     std::exit(EXIT_FAILURE);
   }
 
-  static bool patch_symbol(HMODULE targetDll, HMODULE replaceDll, const char* symbol) {
+  static bool patch_symbol(HMODULE targetDll, HMODULE replaceDll, const char* symbol, bool forceUpdate = true) {
     FARPROC const targetProc  = ::GetProcAddress(targetDll , symbol);
     FARPROC const replaceProc = ::GetProcAddress(replaceDll, symbol);
-    if (!targetProc || !replaceProc) return false;
+    if (!targetProc) return !forceUpdate;
+    if (!replaceProc) return false;
     return patch_function((void*) targetProc, (void*) replaceProc);
   }
 
   static void patch_libstdcxx_locale(HMODULE hInstanceDll) {
     ::HMODULE const cygstdcxxDll = ::GetModuleHandle("cygstdc++-6.dll");
     if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_")) error_throw();
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet19_S_destroy_c_localeERPi"     )) error_exit();
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet17_S_clone_c_localeERPi"       )) error_exit();
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  )) error_exit();
+    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet19_S_destroy_c_localeERPi"     )) error_exit("_S_destroy_c_locale");
+    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet17_S_clone_c_localeERPi"       )) error_exit("_S_clone_c_locale");
+    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  ), false) error_exit("_S_lc_ctype_c_locale");
 
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt11__timepunctIcE23_M_initialize_timepunctEPi")) error_exit();
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPiPKcbj")) error_exit();
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPiPKcbj")) error_exit();
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPKcbj"  )) error_exit();
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPKcbj"  )) error_exit();
+    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt11__timepunctIcE23_M_initialize_timepunctEPi")) error_exit("__timepunct::__timepunct");
+    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPiPKcbj")) error_exit("ctype::ctype");
+    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPiPKcbj")) error_exit("ctype::ctype");
+    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPKcbj"  )) error_exit("ctype::ctype");
+    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPKcbj"  )) error_exit("ctype::ctype");
   }
 }
 

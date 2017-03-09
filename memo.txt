@@ -389,7 +389,7 @@
     どうやら普通に ./configure したとしても newlib を使う様である。
     なので取り敢えずは newlib の実装を修正した物を使うというので問題ないだろう。
 
-  * i4dll に以降する。置き換えを実装する。シンボルは以下の通り。
+  * [i4dll に移行] 置き換えを実装する。シンボルは以下の通り。
 
     _ZNSt11__timepunctIcE23_M_initialize_timepunctEPi
     _ZNSt5ctypeIcEC1EPiPKcbj
@@ -412,3 +412,9 @@
     だとすると DLL である必要がある。
 
     うーん。DLL 専用に impl4 に移ろうか。
+    →できた。よく考えたら DLL にしてしまえば GetProcAddress で
+    どの関数のアドレスでも取得できるので、protected がどうだとか考える必要はなかった。
+
+    さて、これを使って動かしてみると自前でコンパイルした cygstdc++-6 では動作する様になった。
+    然し、cygwin に付属してくる cygstdc++-6.dll で動かしてみると依然として segfault する。
+    うーん。
