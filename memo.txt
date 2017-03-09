@@ -1,0 +1,371 @@
+
+
+
+
+* C++ で std::locale("") すると死んでしまう件について。
+
+  [libstdc++ のロケール問題 - EAGLE 雑記](http://d.hatena.ne.jp/eagletmt/20090208/1234086332)
+
+  なる程。改めて libstdc++ のソースコードを見るとやはり以下で例外を投げている様に思われる。
+  (もし何にも対応できないのだとしたら "" は "C" と同じ扱いにするべきだろうという気がするが…)
+
+  https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/config/locale/generic/c_locale.cc#L226
+
+  という事は…。上記の記事に書かれている様に ./configure に --enable-clocale=gnu 等と指定すれば行けるのだろうか。
+
+  或いは無理やり https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/config/locale/gnu/c_locale.cc#L131 の内容を貼り付ければ良い?
+  と思ったが以下のようにして呼ばれているので locale::_Impl 及び local も上書きしなければならない。。
+
+    (gdb) info stack
+    #0  0x0061dd58 in ?? ()
+    #1  0x76a0ad52 in WaitForSingleObject () from /cygdrive/c/WINDOWS/System32/KERNELBASE.dll
+    #2  0x610e3d5d in sig_send(_pinfo*, siginfo_t&, _cygtls*) () from /usr/bin/cygwin1.dll
+    #3  0x610e093b in _pinfo::kill(siginfo_t&) () from /usr/bin/cygwin1.dll
+    #4  0x610e0dfb in kill0(int, siginfo_t&) () from /usr/bin/cygwin1.dll
+    #5  0x610e0fc2 in raise () from /usr/bin/cygwin1.dll
+    #6  0x610e1289 in abort () from /usr/bin/cygwin1.dll
+    #7  0x497b1e6a in cygstdc++-6!_ZN9__gnu_cxx27__verbose_terminate_handlerEv () from /usr/bin/cygstdc++-6.dll
+    #8  0x497aaa59 in cygstdc++-6!_ZN10__cxxabiv111__terminateEPFvvE () from /usr/bin/cygstdc++-6.dll
+    #9  0x49848cc0 in cygstdc++-6!_ZSt9terminatev () from /usr/bin/cygstdc++-6.dll
+    #10 0x4984fcb2 in cygstdc++-6!.cxa_throw () from /usr/bin/cygstdc++-6.dll
+    #11 0x4984628b in cygstdc++-6!_ZSt21__throw_runtime_errorPKc () from /usr/bin/cygstdc++-6.dll
+    #12 0x498292c3 in cygstdc++-6!_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_ () from /usr/bin/cygstdc++-6.dll
+    #13 0x49827569 in cygstdc++-6!_ZNSt6locale5_ImplC2EPKcj () from /usr/bin/cygstdc++-6.dll
+    #14 0x49829ca8 in cygstdc++-6!_ZNSt6localeC2EPKc () from /usr/bin/cygstdc++-6.dll
+    #15 0x0040129a in main () at hello.cpp:20
+
+  というか gdb は demangle してくれないのか…。仕様がないので手で demangle.cpp を作って demangle する。
+
+    std::locale::facet::_S_create_c_locale(int*&, char const*, int*)
+    std::locale::_Impl::_Impl(char const*, unsigned int)
+    std::locale::locale(char const*)
+
+  という訳で std::locale::_Impl::_Impl について、またソースコードを探しに行く。
+  と思ったが実際には全ての _S_create_c_locale に対して置き換えを実行しなければならない。
+  うーん。或いは、バイナリレベルで置き換えてしまう? つまり API Hook を行う。
+  
+  よくあるのは IAT 書き換えである…と思ったけれど、
+  それだと cygstdc++-6 の内部リンケージにまで影響を与える事ができない。
+
+
+  うーん。cygstdc++-6.dll の中身を除いてみる。
+    $ objdump -d -M intel /usr/bin/cygstdc++-6.dll > cygstdc++6.s
+    .text セクションが全部一繋ぎになって保存されている。
+    シンボルは保存されていないのか。でも変だ。gdb は知っていた。
+    $ objdump -t /usr/bin/cygstdc++-6.dll
+    シンボルテーブルがない
+    $ objdump -T /usr/bin/cygstdc++-6.dll
+    ダイナミックシンボルテーブルもない
+    objdump は windows では動かないのだろうか。
+    $ nm /usr/bin/cygstdc++-6.dll
+    こちらもシンボルがないと言っている。
+    $ ln -s /cygdrive/c/Program\ Files\ \(x86\)/Microsoft\ Visual\ Studio\ 14.0/VC/bin/dumpbin.exe 
+    $ ./dumpbin /SYMBOLS "$(cygpath -w /usr/bin/cygstdc++-6.dll)" 2>&1 | $ICONV
+    何も出ない。
+    $ ./dumpbin /DISASM "$(cygpath -w /usr/bin/cygstdc++-6.dll)" 2>&1 | $ICONV > cygstdc++6.s 
+    やはり全てが一繋がりになっている。関数に分かれていない。
+    これでは Windows の API を使っても dll の中の関数のアドレスは得られない。gdb はどうやっているのだろう。
+    というか .gnu_debuglink という気になるセクションがある。これを読めばよいのだろうか。
+    $ objdump -t /usr/bin/cygstdc++-6.dll
+    改めて -x をしていたらあった。
+    [序数/名前ポインタ] テーブル という所の 3608 番辺りから始まっている。
+    $ depends
+    Dependency Walker を開こうとして Microsoft Visual Stdio 14.0 のディレクトリを丸ごと find したが見つからなかった…。
+    最近の Visual Studio には入っていないのか別の名前になったのか。
+    https://togarasi.wordpress.com/2010/10/18/dependency-walker-%E3%81%AF%E3%81%A9%E3%81%93%E3%81%AB%EF%BC%9F/
+    ここで見ると Visual Studio 2010 で既に存在していなかった様である。別に入れる必要がある。
+    ダウンロードして入れて起動して C:\cygwin\bin\cygstdc++-6.dll を開くとちゃんとシンボルが見える。
+    という事はやはり Windows API で確認できると思って良いだろうか。
+
+  ええと。元々何故 disassemble しようとしたかというと関数本体のサイズが
+  jmp 命令を書き込めるほど充分に大きいか確かめる為であった。
+  それならば実際に手元でコンパイルした置き換え用の関数を確認すれば良いのではないだろうか。
+  今実際に確かめてみると -Os でコンパイルしても実際に充分なサイズがある。
+  と思ったがよく考えたら置き換え対象の関数の中身は違うのだから必ずしも充分なサイズが有るとは限らない。
+
+  depends で見たら何か分かるかもしれない。と思ったけれど関数のアドレスまでは表示されていなかった。
+  しかし他の dll だと表示されている。おかしい。もしかすると依存している dll しか関数のアドレスは表示されないのか?
+  と思って a.exe (cygstdc++-6.dll を参照している) を介して見てみると表示されている。
+  但し一部のシンボルが長すぎて "Function" の列が横にずっと長くなっているので、スクロールしないと見えない。
+  と思って改めて cygstdc++-6.dll を直接開いてみると実はスクロールすれば見えたのだという事が分かった。
+  そして関数のアドレスは…次の関数の位置まで使えると仮定すれば
+
+    _S_create_c_locale    89290～892D0 64 bytes
+    _S_destroy_c_locale   89300～89310 16 bytes
+    _S_clone_c_locale     89280～89290 16 bytes
+    _S_lc_ctype_c_locale  89310～89320 16 bytes
+
+  何れも 16 bytes までなら書き込める様である。align されているという事だろうか。
+  また 64 bytes だったり 16 bytes だったりする事から IAT へのアドレスではなくて
+  ちゃんと本体へのアドレスなのではないかと期待できる (感覚をまちまちにする理由がない)。
+  然し一方で、自前で用意した関数の実体は実行時に表示すると
+
+    0x4014b6
+    0x4011d0
+    0x4011f8
+    0x401536
+
+  となっていて別に align されているという事はない様に見える。大丈夫だろうか。
+  まあ、何れにしても GetProcAddress をすれば分かるだろう。
+  さて、サンプルを探そう…と思ったら普通に Wikipedia にサンプルが書かれている…。凄い時代だ。
+  https://en.wikipedia.org/wiki/Hooking#API.2FFunction_Hooking.2FInterception_Using_JMP_Instruction_aka_splicing
+
+  さて、実際に GetProcAddress で取得される内容を表示させると以下の様になっている。
+  相対的な位置は…一致している。というか下6桁が一致している。上書きして大丈夫だろう。
+
+    0x49829290
+    0x49829300
+    0x49829280
+    0x49829310
+
+  取り敢えず動くようだという事を確かめたが、それでも SIGSEGV だとか SIGABRT が起こる。
+  どうした事かと思って確保と解放を追ってみると確保した事の無いものが開放されようとしている。
+  これは変だと思ったがよく考えてみれば当たり前である。途中で関数を書き換えているのであるから、
+  書き換える前に確保された物について解放ができなくなってしまっているのである。
+
+  a 一つの方法は自分が確保した物の一覧を覚えておいて、
+    解放などの操作の際に毎回自分が確保したものかどうか確認を行って、
+    もし自分が確保したものでなければオリジナルの関数を呼び出すという様に変更する。
+    これはオリジナルの関数の中身を記憶して置かなければならないという面倒さも存在する。
+
+  b もう一つの方法は DLL として登録してしまって標準ライブラリの初期化が起こる前に
+    関数の書き換えを済ませてしまうという方法である。
+    この方法の問題点は標準ライブラリの初期化が実はどのタイミングで起こるか分からない点にある。
+    もし初期化が dll initialize で行われるのだとするとこの方法ではできない。
+
+    - 更によく考えてみれば標準ライブラリの初期化前なので中で標準ライブラリの関数を呼び出しても良いのかどうか怪しい。
+      実際に http://stackoverflow.com/questions/24413545/dllmain-behaves-oddly-with-g-on-cygwin を見ると
+      DllMain の中で printf すると変な事になる様である。
+      さて Windows API で同等の事をする方法はあるだろうか。
+      WriteConsole を使うとどうなるか。よく考えるとそういう事ではない気がする。
+      したいのは何かというと "標準出力" にデータを書き出すという事である。
+      まあ、失敗しない限りは printf は呼び出さないので気にしなくても大丈夫か…。
+
+    - ところで DLL_PROCESS_DETACH の時に復元しなくても良いのだろうか。
+      よく考えてみれば DLL として定義するのであれば detach した時の事も考えなければならない。
+      detach した後に置き換えた関数を呼び出そうとするとその転送先が既に存在しないという事になる。
+      でも一緒にロードして最後まで detach されないのだとすれば、
+      実際に detach されるのはプログラムが停止した後のはずで、
+      だとすればそれより後に置き換えた関数 (std::locale 周り) が使われることはないはずである。
+      なのでこれについては気にしなくても大丈夫のはずである。
+
+  実際に b をやってみたが状況は変化しない。
+  一応 DllMain は呼び出されて入る様だ。なぜなら関数が置き換わっているので。
+  しかしそれでも知らない物体について呼び出しが起こるのには二つの可能性がある。
+
+  1. 標準ライブラリの初期化よりも後に関数置き換えが起こっている
+  2. 実は関数置き換えのタイミングの問題ではなくて全然違う問題である
+
+  実は dll にした事によって main 内で何も実行しなくても置き換えられた関数が呼び出される様になった。
+  これは何を意味するかというと DllMain での関数置き換えよりも後で何らかの初期化処理があって、
+  そこで std::locale のオブジェクトが作られたという事である。
+  デフォルトの std::locale 自体の初期化に使われたのかそれとも別の用途のために追加で生成された物なのかは分からない。
+
+  というか改めて generic のコードを見てみた所、何を初期化しても 0 が設定されるはずである。
+  という事は何か有限の値が free に渡されている時点で初期化順序の問題ではない。
+  だとすると何かが壊れている事によってこれが起こっている…。
+
+
+  うーん。面倒なのでやはり gcc-5.4 から libstdc++-6 をコンパイルするか。。
+  ダウンロードして libstdc++-v3 ディレクトリの下で configure したらすぐにコンパイルできる様な雰囲気である。
+  特別な外部ライブラリは要求されなかった。
+  但し、./configure の最後の最後で失敗するので config.status の multi_basedir="./../.." という行を
+  multi_basedir="./.." に書き換えて手動で ./config.status を実行する。その後で make をしたら
+  src/.libs/cygstdc++-6.dll に DLL ができた。それをローカルにコピーする。
+  PATH と LD_LIBRARY_PATH も設定する。
+  →それで std::locale("") を実行してみたが駄目だった。その様な名前のロケールはないとなる。
+    depends で見るとちゃんと関数のサイズは変化しているので gnu になっているのではないかと思う。
+    ./impl1 等の上書きをする版を実行すると失敗する (振る舞いが異なる) のでちゃんと新しい DLL を読み込んではいる様だ。
+    # 失敗するのは何かと思ったら depends で見ると公開されている関数のセットが異なる。
+    # なのでそもそも自前の DLL を使うことが微妙。使えないような気がしてきた。
+    うーん。念のために dll に含まれている関数の実体を確認する。
+    88C10 に関数 _S_create_c_locale がある様だ。objdump したら今度はちゃんとシンボルが埋まっている。
+    さて _S_create_c_locale を検索すると…あった。が、これは generic を使って実装になっている! 駄目だ。
+    コンパイルし直しだ。或いは configure のログを見る必要がある。
+
+    うーん refact -F locale/generic locale/gnu $(find . -name Makefile) で無理やり Makefile を書き換えて試してみる。make clean。make。
+    変わらない。更に ln -sf /home/murase/.mwg/src/colored/test/gcc-5.4.0/libstdc++-v3/config/locale/gnu/c_locale.cc src/c++98/c++locale.cc とする。
+    そうすると以下の様なコンパイルエラーになってコンパイルできなかった。うーん。
+
+    | c++locale.cc: 関数 ‘void std::__convert_to_v(const char*, _Tp&, std::ios_base::iostate&, int* const&) [with _Tp = float; std::ios_base::iostate = std::_Ios_Iostate; std::__c_locale = int*]’ 内:
+    | c++locale.cc:47:46: エラー: ‘__strtof_l’ was not declared in this scope
+    |        __v = __strtof_l(__s, &__sanity, __cloc);
+    |                                               ^
+    | c++locale.cc: 関数 ‘void std::__convert_to_v(const char*, _Tp&, std::ios_base::iostate&, int* const&) [with _Tp = double; std::ios_base::iostate = std::_Ios_Iostate; std::__c_locale = int*]’ 内:
+    | c++locale.cc:74:46: エラー: ‘__strtod_l’ was not declared in this scope
+    |        __v = __strtod_l(__s, &__sanity, __cloc);
+    |                                               ^
+    | c++locale.cc: 関数 ‘void std::__convert_to_v(const char*, _Tp&, std::ios_base::iostate&, int* const&) [with _Tp = long double; std::ios_base::iostate = std::_Ios_Iostate; std::__c_locale = int*]’ 内:
+    | c++locale.cc:106:47: エラー: ‘__strtold_l’ was not declared in this scope
+    |        __v = __strtold_l(__s, &__sanity, __cloc);
+    |                                                ^
+    | c++locale.cc: 静的メンバ関数 ‘static void std::locale::facet::_S_create_c_locale(int*&, const char*, std::__c_locale)’ 内:
+    | c++locale.cc:132:49: エラー: ‘__newlocale’ was not declared in this scope
+    |      __cloc = __newlocale(1 << LC_ALL, __s, __old);
+    |                                                  ^
+    | c++locale.cc: 静的メンバ関数 ‘static void std::locale::facet::_S_destroy_c_locale(int*&)’ 内:
+    | c++locale.cc:145:26: エラー: ‘__freelocale’ was not declared in this scope
+    |        __freelocale(__cloc);
+    |                           ^
+    | c++locale.cc: 静的メンバ関数 ‘static int* std::locale::facet::_S_clone_c_locale(int*&)’ 内:
+    | c++locale.cc:150:30: エラー: ‘__duplocale’ was not declared in this scope
+    |    { return __duplocale(__cloc); }
+    |                               ^
+    | c++locale.cc: 静的メンバ関数 ‘static int* std::locale::facet::_S_lc_ctype_c_locale(std::__c_locale, const char*)’ 内:
+    | c++locale.cc:155:42: エラー: ‘__duplocale’ was not declared in this scope
+    |      __c_locale __dup = __duplocale(__cloc);
+    |                                           ^
+    | c++locale.cc:162:65: エラー: ‘__newlocale’ was not declared in this scope
+    |      __c_locale __changed = __newlocale(1 << LC_CTYPE, __s, __dup);
+    |                                                                  ^
+    | c++locale.cc:166:20: エラー: ‘__freelocale’ was not declared in this scope
+    |   __freelocale(__dup);
+    |                     ^
+    | c++locale.cc: 大域スコープ:
+    | c++locale.cc:194:5: エラー: too many initializers for ‘const char* const [6]’
+    |      };
+
+    今度は自前の関数に置き換えて試してみる。
+    libstdc++-v3$ cp config/locale/generic/c_locale.cc src/c++98/c++locale.cc 
+    libstdc++-v3$ emacs src/c++98/c++locale.cc 
+
+    以下の様に書き換えを行う。
+
+    | #if (__GLIBC__ < 2 || __GLIBC__ == 2 && __GLIBC_MINOR__ <= 2)
+    | # ifndef LC_CTYPE_MASK
+    | #  define LC_CTYPE_MASK (1 << LC_CTYPE)
+    | # endif
+    | #endif
+    | 
+    |   void locale::facet::_S_create_c_locale(__c_locale& locobj, const char* locstr, __c_locale base) {
+    |     if (!(locobj = (__c_locale) ::newlocale(1 << LC_ALL, locstr, (::locale_t) base)))
+    |       throw std::runtime_error("std::locale::facet::_S_create_c_locale(__c_local, const char*, __clocale): failed");
+    |   }
+    | 
+    |   void locale::facet::_S_destroy_c_locale(__c_locale& locobj) {
+    |     if (locobj && _S_get_c_locale() != locobj)
+    |       ::freelocale((::locale_t) locobj);
+    |   }
+    | 
+    |   __c_locale locale::facet::_S_clone_c_locale(__c_locale& locobj) throw() {
+    |     return (__c_locale) ::duplocale((::locale_t) locobj);
+    |   }
+    | 
+    |   __c_locale locale::facet::_S_lc_ctype_c_locale(__c_locale locobj, const char* locstr) {
+    |     ::locale_t const base = ::duplocale((::locale_t) locobj);
+    |     if (!base) {
+    |       throw std::runtime_error("std::locale::facet::_S_lc_ctype_c_locale(__clocale, const char*): failed in duplocale");
+    |     }
+    | 
+    |     ::locale_t const result = ::newlocale(LC_CTYPE_MASK, locstr, base);
+    |     if (!result) {
+    |       ::freelocale(base);
+    |       throw std::runtime_error("std::locale::facet::_S_lc_ctype_c_locale(__clocale, const char*): failed in newlocale");
+    |     }
+    | 
+    |     return (__c_locale) result;
+    |   }
+
+    コンパイルする。コンパイルが通る。DLL を objdump してみるとちゃんと中身も変わっている。
+    そこで DLL をコピーしてみると std::locale("") しても動く。
+    さて同様にしてまた std::locale("") で様々な値を指定して実行してみると…。
+    ./impl0 でも seg fault になった。という事は。これは関数書き換えの失敗ではなくて、
+    そもそも何処か libstdc++-6 の中にバグが有るのではないかという事が疑われる。
+    或いは書き換えの足らないところがある。
+
+
+    DLL に -g を指定してコンパイルし直しそれを用いてデバグを試みる。
+    $ gcc5.4/libstdc++-v3
+    $ refact '^(CXXFLAGS|CFLAGS) = ' '\1 = -g ' $(find . -name Makefile)
+    $ m
+
+    _M_c_locale_ctype の初期化を修正する。
+
+      gdb で探ってみた所 ctype::~ctype にて
+      _M_c_locale_ctype という値に変な値が入っているのが問題の様に思われる。
+      基本的に _M_c_locale_ctype には _S_get_c_locale の値しか入らない。
+      一箇所だけ _S_clone_c_locale の値で初期化している箇所がある。
+
+      src/c++11/ctype.cc:110:  _M_c_locale_ctype(_S_clone_c_locale(__cloc)), _M_narrow_ok(false)
+
+      従って…(_S_get_c_locale の値が変わらない限りは) この clone が怪しい?
+      然し確かめてみても変な値で初期化しているということはないようだ。
+      だとすると _S_get_c_locale が変な値を返したか、
+      或いは、_M_c_locale_ctype が誰かに上書きされたかという事である。
+      - 念の為本当に _M_c_locale_ctype がいけないのか確認する→やはりそうだった。
+      - 次にチェックするのは _S_get_c_locale の値である。
+        確かめてみたが _S_get_c_locale は一貫して同じ値を返している。
+        なのでこれが原因ではない。この printf は削除しておく。
+      - 次に _M_c_locale_ctype に対して書き込みが行われている箇所を全て確認する。
+        やっぱりおかしい変な値が入る要素は何処にもない。だとすれば初期化漏れか。
+      - 初期化漏れしていないか確認する。_M_c_locale_ctype が宣言されているのは何処か。
+        include/bits/locale_facets.h である。
+        ctype<wchar_t> のメンバと ctype<char> のメンバである。
+        それぞれ二つずつコンストラクタを持っている。
+        不思議な事に ctype<wchar_t> のコンストラクタが存在しない?
+        と思ったら config/os/generic/ctype_configure_char.cc:45 にコンストラクタがある様だ。
+        こちらは書き換えていない…。これが悪いのか。見てみる。
+        必要があれば gnu の実装を参考にして追加を行う。
+
+      ctype_configure_char.cc は現在の実装では newlib というのを使っている。
+      うーん。何故 generic でもなければ gnu-linux でも mingw32 でもなくて newlib なのだろう。
+      その当たりの整合性は大丈夫なのだろうか…。
+      更に実装を色々見ると do_is 等の重要な関数も全て os 毎の実装になっている。
+      色々面倒な事である。何れにしても newlib のコンストラクタで
+      _M_c_locale_ctype が 0 になる様にすれば文字コードに関しては問題なく動く様になったりしないか。
+      → _M_c_locale_ctype に関しては直った。所がまた別の変な値を free しようとしている。
+
+    _M_c_locale_timepunct の修正
+
+      面倒になったので怪しい locobj の値を検出して其処でブレークする様に修正する。
+      ブレークポイントに引っかかった時に info stack すれば犯人が何処かすぐに分かる。
+      今度のは ~__time_punct から呼び出される destroy によるもののようだ。
+      _M_c_locale_timepunct に変な値が入っているという事の様だ。構造は先程と似ている。
+      _M_c_locale_timepunct は include/bits/locale_facets_nonio.h で定義されている
+      __timepunct のメンバである。
+      gnu では _M_c_locale_timepunct は 0 で初期化することにしている。
+      では __timepunct のコンストラクタは何処にあるか。
+      どうやら include/bits/time_members.h にあってこれは configure によって切り替わる様だ。
+      現在は generic の値が使われている。
+
+      これを直したら動いてしまった。
+      ※注意: include/bits/time_member.h を修正しても依存関係を追っていないのかコンパイルし直されなかったので、
+        結局 m clean して全てコンパイルし直す羽目になった。
+
+    さて、今までに何を修正したか。
+    src/c++11/ctype_configure_char.cc の ctype コンストラクタ x 2 と、
+    include/bits/time_members.h の __timepunct コンストラクタ x 3 である。
+
+    ヘッダに存在しているコンストラクタ __timepunct の hot patch は作れない。
+    インライン展開されて様々な所に転移しているからである。
+    コンストラクタから呼び出している _M_initialize_timepunct をいじれば良いだろう。
+    - _M_initialize_timepunct は 3 つのコンストラクタの何れからも呼び出される。
+    - _M_initialize_timepunct は src/c++98/time_members.cc で定義されている。
+      これは実際にはシステムに依って色々の内容になっている。
+
+      a 一番良いのは gnu の実装で上書きしてしまうことだが色々な怪しい関数を呼び出しているので
+        これが cygwin の上で通るかどうかはわからない。面倒なので試さない。
+
+      b 次に良い方法は既存の関数の中身はそのままにして、
+        関数呼び出しの前に介入をする事である。
+        これは既存の処理を変更する事による不整合を防ぐという意味で良い。
+
+      c 最後の方法は完全に上書きしてしまうという方法である。
+
+    取り敢えずは b の方法が可能かどうかについて考えてみる。
+
+    - 先ず __timepunct の定義されている bits/locale_facets_nonio.h ヘッダは公開されているだろうか。
+      /usr/lib/gcc/i686-pc-cygwin/5.4.0/include/c++/bits/locale_facets_nonio.h に存在している。
+      従って、自分で憶測のヘッダを作ったりする必要性はない。
+
+    - 上書きする関数 _M_initialize_timepunct は protected なので、
+      std::__timepunct<char> から派生すれば見える。
+
+    - 関数自体は手元でコンパイルが通る。
+
+    多分できそうだ。一回 a で実装してから b に移行する方向で考える。
+    一旦ここで repository にして保存する事にする。
+
+    ※
+    hot patching の時は本当に newlib の実装で良いのか確認する必要がある。
+
