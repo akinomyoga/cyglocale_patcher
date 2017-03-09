@@ -366,6 +366,49 @@
     多分できそうだ。一回 a で実装してから b に移行する方向で考える。
     一旦ここで repository にして保存する事にする。
 
-    ※
-    hot patching の時は本当に newlib の実装で良いのか確認する必要がある。
 
+  * _M_initialize_timepunct 置き換え関数を実装する。
+
+    先に通常の ./configure でどの様な config になるのかを確認しておく必要がある。
+    もしかすると今までに修正したのと異なる修正が必要になるかもしれない。
+    特に ctype_configure_char.cc が newlib になっていたのは怪しい。
+
+    > hot patching の時は本当に newlib の実装で良いのか確認する必要がある。
+
+    通常の ./configure で構成を調べる。
+
+    $ CFLAGS='-O2 -g' CXXFLAGS='-O2 -g' ./configure --prefix=$HOME/opt/libstdc++-6
+    $ emacs config.status # multi_basedir="./.." に書き換える。
+    $ ./config.status
+    $ make -j4
+    $ cd src/c++11
+    $ ls -l # 観察
+    $ cd ../c++98
+    $ ls -l # 観察
+
+    どうやら普通に ./configure したとしても newlib を使う様である。
+    なので取り敢えずは newlib の実装を修正した物を使うというので問題ないだろう。
+
+  * i4dll に以降する。置き換えを実装する。シンボルは以下の通り。
+
+    _ZNSt11__timepunctIcE23_M_initialize_timepunctEPi
+    _ZNSt5ctypeIcEC1EPiPKcbj
+    _ZNSt5ctypeIcEC2EPiPKcbj
+    _ZNSt5ctypeIcEC1EPKcbj
+    _ZNSt5ctypeIcEC2EPKcbj
+
+    怪しい関数名が複数あるので demangle して確認する。
+    うーん。二つずつあるのの違いがわからない…。
+    呼び出し規約か何かが違ったりするのだろうか。。
+    或いはコンストラクタはそういう物なのか…。
+    コンストラクタを修正するのはよくないかもしれない…。
+    が他にどうするというのも思い浮かばない。
+
+    取り敢えずcygstdc++ の方を確認してみる。
+    うーん。ちゃんと2つずつある。
+    それぞれ全部対応する物で置き換える必要がありそうだ。
+    自分自身の 2 種類ある物をどうやって取得するかだが、
+    自分自身の hInstance を取得してその上で上書きする?
+    だとすると DLL である必要がある。
+
+    うーん。DLL 専用に impl4 に移ろうか。

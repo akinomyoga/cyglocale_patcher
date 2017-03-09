@@ -25,7 +25,20 @@
 //
 // 問題の関数を内部で呼び出しているような関数は DLL から沢山エクスポートされている。
 // それらを全て置き換えるのは非現実的だ。
-// 仕方がないので関数の実体を動的に書き換える事にする。
+// 仕方がないので関数の実体を動的に書き換える事にする。以下の関数を置き換える。x
+//
+// - std::locale::facet::_S_create_c_locale(int*&, char const*, int*)
+// - std::locale::facet::_S_destroy_c_locale(int*&)
+// - std::locale::facet::_S_clone_c_locale(int*&)
+// - std::locale::facet::_S_lc_ctype_c_locale(int*, char const*)
+//
+// 実際に置き換えてみるとエラーが発生する。
+// 幾つかの箇所で未初期化の変数を _S_destroy_c_locale に渡している事が判明した。
+// 問題が発生しないように未初期化の変数をちゃんと初期化する様に、以下の関数にも修正が必要だった。
+//
+// - std::__timepunct<char>::_M_initialize_timepunct(int*)
+// - std::ctype<char>::ctype(int*, char const*, bool, unsigned int)
+// - std::ctype<char>::ctype(char const*, bool, unsigned int)
 //
 //
 // [1] http://d.hatena.ne.jp/eagletmt/20090208/1234086332
@@ -91,68 +104,6 @@ namespace std {
     std::fflush(stderr);
 #endif
     return (__c_locale) result;
-  }
-
-  template<>
-  void __timepunct<char>::_M_initialize_timepunct(__c_locale) {
-    // "C" locale.
-    if (!_M_data) _M_data = new __timepunct_cache<char>;
-
-    _M_data->_M_date_format = "%m/%d/%y";
-    _M_data->_M_date_era_format = "%m/%d/%y";
-    _M_data->_M_time_format = "%H:%M:%S";
-    _M_data->_M_time_era_format = "%H:%M:%S";
-    _M_data->_M_date_time_format = "";
-    _M_data->_M_date_time_era_format = "";
-    _M_data->_M_am = "AM";
-    _M_data->_M_pm = "PM";
-    _M_data->_M_am_pm_format = "";
-
-    // Day names, starting with "C"'s Sunday.
-    _M_data->_M_day1 = "Sunday";
-    _M_data->_M_day2 = "Monday";
-    _M_data->_M_day3 = "Tuesday";
-    _M_data->_M_day4 = "Wednesday";
-    _M_data->_M_day5 = "Thursday";
-    _M_data->_M_day6 = "Friday";
-    _M_data->_M_day7 = "Saturday";
-
-    // Abbreviated day names, starting with "C"'s Sun.
-    _M_data->_M_aday1 = "Sun";
-    _M_data->_M_aday2 = "Mon";
-    _M_data->_M_aday3 = "Tue";
-    _M_data->_M_aday4 = "Wed";
-    _M_data->_M_aday5 = "Thu";
-    _M_data->_M_aday6 = "Fri";
-    _M_data->_M_aday7 = "Sat";
-
-    // Month names, starting with "C"'s January.
-    _M_data->_M_month01 = "January";
-    _M_data->_M_month02 = "February";
-    _M_data->_M_month03 = "March";
-    _M_data->_M_month04 = "April";
-    _M_data->_M_month05 = "May";
-    _M_data->_M_month06 = "June";
-    _M_data->_M_month07 = "July";
-    _M_data->_M_month08 = "August";
-    _M_data->_M_month09 = "September";
-    _M_data->_M_month10 = "October";
-    _M_data->_M_month11 = "November";
-    _M_data->_M_month12 = "December";
-
-    // Abbreviated month names, starting with "C"'s Jan.
-    _M_data->_M_amonth01 = "Jan";
-    _M_data->_M_amonth02 = "Feb";
-    _M_data->_M_amonth03 = "Mar";
-    _M_data->_M_amonth04 = "Apr";
-    _M_data->_M_amonth05 = "May";
-    _M_data->_M_amonth06 = "Jun";
-    _M_data->_M_amonth07 = "Jul";
-    _M_data->_M_amonth08 = "Aug";
-    _M_data->_M_amonth09 = "Sep";
-    _M_data->_M_amonth10 = "Oct";
-    _M_data->_M_amonth11 = "Nov";
-    _M_data->_M_amonth12 = "Dec";
   }
 }
 

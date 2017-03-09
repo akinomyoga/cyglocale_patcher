@@ -20,3 +20,9 @@ impl2.dll: impl2dll.o impl1patch.o
 
 impl2.exe: impl2.o
 	g++ -g -L . -o $@ $^ -limpl2
+
+all: libstdcxx_locale_patch.dll
+libstdcxx_locale_patch.dll: i4dll.o
+	g++ -g -shared -o $@ $^
+# i4.exe: i4.o
+# 	g++ -g -shared -o $@ $^
