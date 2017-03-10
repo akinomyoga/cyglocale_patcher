@@ -139,7 +139,7 @@
  * `locale_t` の確保・解放を逐一出力する事を示す。
  *
  */
-//#define USE_PRINT_ALLOC
+#define USE_PRINT_ALLOC
 
 #ifdef USE_LOCOBJ_COUNT
 # if __cplusplus >= 201103L
@@ -160,7 +160,7 @@ namespace std {
     allocatedList.insert((locale_t) locobj);
 #endif
 #ifdef USE_PRINT_ALLOC
-    std::fprintf(stderr, "new %p\n", locobj);
+    std::fprintf(stderr, "new %p <- %p\n", locobj, base);
     std::fflush(stderr);
 #endif
   }
@@ -184,7 +184,7 @@ namespace std {
     allocatedList.insert(result);
 #endif
 #ifdef USE_PRINT_ALLOC
-    std::fprintf(stderr, "dup %p\n", result);
+    std::fprintf(stderr, "dup %p <- %p\n", result, locobj);
     std::fflush(stderr);
 #endif
     return (__c_locale) result;
@@ -206,7 +206,7 @@ namespace std {
     allocatedList.insert(result);
 #endif
 #ifdef USE_PRINT_ALLOC
-    std::fprintf(stderr, "ctype %p\n", result);
+    std::fprintf(stderr, "ctype %p <-(%s)- %p\n", result, locstr, locobj);
     std::fflush(stderr);
 #endif
     return (__c_locale) result;
@@ -320,6 +320,10 @@ namespace std {
   }
 
   int codecvt<wchar_t, char, mbstate_t>::do_max_length() const throw() {
+#ifdef USE_PRINT_ALLOC
+    std::fprintf(stderr, "use %p\n", _M_c_locale_codecvt);
+    std::fflush(stderr);
+#endif
     locale_t const old = uselocale((locale_t) _M_c_locale_codecvt);
     int const ret = MB_CUR_MAX;
     uselocale(old);
@@ -534,6 +538,7 @@ namespace {
       }
       ::VirtualProtect((LPVOID) ptarget, sizeof(void*), old_protect, &old_protect);
     }
+    // else std::fprintf(stderr, "tgt=%p rep=%p\n", ptarget, preplace);
 
     return result;
   }
@@ -583,7 +588,7 @@ namespace {
       FARPROC const replaceProc = ::GetProcAddress(replaceDll  , symbol);
       if (!targetProc)
         done = !forceUpdate;
-      if (!replaceProc)
+      else if (!replaceProc)
         done = false;
       else
         done = patch_function((void*) targetProc, (void*) replaceProc);
@@ -616,38 +621,41 @@ namespace {
       patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE9do_lengthERS0_PKcS4_j"         , hInstanceDll);
     }
 
-    // どうも protected な仮想関数のアドレスは取れない様だ。
+    // どうも protected なメンバ関数のアドレスは取れない様だ。
     // 呼び出せはするのでこのクラスにメンバ関数を実装する。
-    codecvt_base::result nonvirt_out(
+    codecvt_base::result my_out(
       state_type& state,
       const intern_type* src0, const intern_type* srcN, const intern_type*& src,
       extern_type* dst0, extern_type* dstN, extern_type*& dst) const
     {
       return base::do_out(state, src0, srcN, src, dst0, dstN, dst);
     }
-    codecvt_base::result nonvirt_in(
+    codecvt_base::result my_in(
       state_type& state,
       const extern_type* src0, const extern_type* srcN, const extern_type*& src,
       intern_type* dst0, intern_type* dstN, intern_type*& dst) const
     {
       return base::do_in(state, src0, srcN, src, dst0, dstN, dst);
     }
-    int nonvirt_encoding() const throw() { return base::do_encoding(); }
-    int nonvirt_max_length() const throw() { return base::do_max_length(); }
-    int nonvirt_length(state_type& state, const extern_type* src, const extern_type* srcN, size_t max) const {
+    int my_encoding() const throw() { return base::do_encoding(); }
+    int my_max_length() const throw() { return base::do_max_length(); }
+    int my_length(state_type& state, const extern_type* src, const extern_type* srcN, size_t max) const {
       return base::do_length(state, src, srcN, max);
     }
 
     static void patch(libstdcxx_patcher& patcher) {
-      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE6do_outERS0_PKwS4_RS4_PcS6_RS6_", &self::nonvirt_in        );
-      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE5do_inERS0_PKcS4_RS4_PwS6_RS6_" , &self::nonvirt_out       );
-      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE11do_encodingEv"                , &self::nonvirt_encoding  );
-      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE13do_max_lengthEv"              , &self::nonvirt_max_length);
-      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE9do_lengthERS0_PKcS4_j"         , &self::nonvirt_length    );
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE6do_outERS0_PKwS4_RS4_PcS6_RS6_", &self::my_out       );
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE5do_inERS0_PKcS4_RS4_PwS6_RS6_" , &self::my_in        );
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE11do_encodingEv"                , &self::my_encoding  );
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE13do_max_lengthEv"              , &self::my_max_length);
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE9do_lengthERS0_PKcS4_j"         , &self::my_length    );
     }
   };
 
   struct patch_libstdcxx_locale_impl2: std::__timepunct<char> {
+    typedef std::__timepunct<char> base;
+    typedef patch_libstdcxx_locale_impl2 self;
+
 #ifdef USE_LOCOBJ_COUNT
     // USE_LOCOBJ_COUNT であっても、しないよりはする方がまし。
     static const bool force_update = false;
@@ -663,9 +671,13 @@ namespace {
       patcher.patch_symbol("_ZNSt5ctypeIcEC1EPKcbj"  , hInstanceDll, force_update);
       patcher.patch_symbol("_ZNSt5ctypeIcEC2EPKcbj"  , hInstanceDll, force_update);
     }
+
+    void my_initialize_timepunct(std::__c_locale arg) {
+      return base::_M_initialize_timepunct(arg);
+    }
+
     static void patch(libstdcxx_patcher& patcher) {
-      //※protected なのに何故か触れない。何故だろう。
-      // patcher.patch_symbol("_ZNSt11__timepunctIcE23_M_initialize_timepunctEPi", &std::__timepunct<char>::_M_initialize_timepunct, force_update);
+      patcher.patch_symbol("_ZNSt11__timepunctIcE23_M_initialize_timepunctEPi", &self::my_initialize_timepunct, force_update);
 
       // ※残念ながらコンストラクタへのポインタは取得できない。
       // ctype<char>::ctype(__c_locale, const mask* table, bool del, size_t refs)
@@ -682,6 +694,7 @@ extern "C" BOOL WINAPI DllMain(HMODULE hinstDLL, DWORD fdwReason, LPVOID lpvRese
       libstdcxx_patcher patcher;
       patch_libstdcxx_locale_impl1::patch(patcher, hinstDLL);
       patch_libstdcxx_locale_impl2::patch(patcher, hinstDLL);
+      patch_libstdcxx_locale_impl3::patch(patcher, hinstDLL);
     }
     break;
   }
@@ -695,6 +708,7 @@ int patch_libstdcxx_locale() {
   libstdcxx_patcher patcher;
   patch_libstdcxx_locale_impl1::patch(patcher);
   patch_libstdcxx_locale_impl2::patch(patcher);
+  patch_libstdcxx_locale_impl3::patch(patcher);
   return 0;
 }
 

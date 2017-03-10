@@ -43,6 +43,8 @@ void test2setlocale() {
 void test2imbue() {
   std::ios_base::sync_with_stdio(false);
   std::wcout.imbue(std::locale(""));
+  std::wcout << L"あいうえお1";
+  std::flush(std::wcout);
   std::wcout << L"あいうえお1" << std::endl;
   std::wcout.imbue(std::locale("ja_JP.UTF-8"));
   std::wcout << L"あいうえお2" << std::endl;
@@ -101,9 +103,18 @@ void test3() {
 }
 
 int main() {
+#ifdef USE_PATCH_DLL
+  int use_libstdcxx_locale_patch();
+  use_libstdcxx_locale_patch();
+#elif defined(USE_PATCH)
+  int patch_libstdcxx_locale();
+  patch_libstdcxx_locale();
+#endif
+
   //test2full();
   //test2setlocale();
   //test2imbue(); // basic_filebuf::_M_convert_to_external conversion error
-  test3();
-  return 0;
+  //test3();
+
+  return debug_mb_cur_max();
 }

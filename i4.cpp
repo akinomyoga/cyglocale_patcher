@@ -3,6 +3,8 @@
 
 void test1() {
   std::locale("");
+  std::locale("ja_JP.cp932");
+  std::locale("ja_JP.EUC-JP");
 }
 
 void test2() {
@@ -25,15 +27,8 @@ void test2() {
   std::wcout << L"あいうえお" << std::endl;
 }
 
-void test3() {
-  std::locale("ja_JP.cp932");
-  std::locale("ja_JP.EUC-JP");
-}
-
-int use_libstdcxx_locale_patch();
-
 int main() {
-  use_libstdcxx_locale_patch();
+
   test2();
   //test3();
   return 0;
