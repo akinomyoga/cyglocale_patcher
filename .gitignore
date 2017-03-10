@@ -9,3 +9,4 @@
 *.stackdump
 /gcc-5.4.0.tar.gz
 /gcc-5.4.0
+/lib
