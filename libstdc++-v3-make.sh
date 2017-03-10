@@ -16,7 +16,8 @@ for f in src/c++98/c++locale.cc include/bits/time_members.h src/c++11/ctype_conf
   mv "$f" "$f.bk"
   cp -L "$f.bk" "$f"
 done
-patch -p 1 < ../../libstdc++-v3.patch
+patch -p 1 < ../../libstdc++-v3-001.patch
+patch -p 1 < ../../libstdc++-v3-002.patch
 
 # 再度 make する。
 make clean

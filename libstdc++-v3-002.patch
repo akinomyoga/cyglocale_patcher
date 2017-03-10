@@ -1,0 +1,324 @@
+diff --git a/src/c++98/codecvt_members.cc b/src/c++98/codecvt_members.cc
+index 21cfc8a..4d5bff5 100644
+--- a/src/c++98/codecvt_members.cc
++++ b/src/c++98/codecvt_members.cc
+@@ -39,179 +39,161 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+ 
+   // Specializations.
+ #ifdef _GLIBCXX_USE_WCHAR_T
+-  codecvt_base::result
+-  codecvt<wchar_t, char, mbstate_t>::
+-  do_out(state_type& __state, const intern_type* __from, 
+-	 const intern_type* __from_end, const intern_type*& __from_next,
+-	 extern_type* __to, extern_type* __to_end,
+-	 extern_type*& __to_next) const
++  codecvt_base::result codecvt<wchar_t, char, mbstate_t>::do_out(
++    state_type& state, const intern_type* src0,
++    const intern_type* srcN, const intern_type*& src,
++    extern_type* dst0, extern_type* dstN,
++    extern_type*& dst) const
+   {
+-    result __ret = ok;
+-    // The conversion must be done using a temporary destination buffer
+-    // since it is not possible to pass the size of the buffer to wcrtomb
+-    state_type __tmp_state(__state);
+-
+-    // The conversion must be done by calling wcrtomb in a loop rather
+-    // than using wcsrtombs because wcsrtombs assumes that the input is
+-    // zero-terminated.
+-
+-    // Either we can upper bound the total number of external characters to
+-    // something smaller than __to_end - __to or the conversion must be done
+-    // using a temporary destination buffer since it is not possible to
+-    // pass the size of the buffer to wcrtomb
+-    if (MB_CUR_MAX * (__from_end - __from) - (__to_end - __to) <= 0)
+-      while (__from < __from_end)
+-	{
+-	  const size_t __conv = wcrtomb(__to, *__from, &__tmp_state);
+-	  if (__conv == static_cast<size_t>(-1))
+-	    {
+-	      __ret = error;
+-	      break;
+-	    }
+-	  __state = __tmp_state;
+-	  __to += __conv;
+-	  __from++;
+-	}
+-    else
+-      {
+-	extern_type __buf[MB_LEN_MAX];
+-	while (__from < __from_end && __to < __to_end)
+-	  {
+-	    const size_t __conv = wcrtomb(__buf, *__from, &__tmp_state);
+-	    if (__conv == static_cast<size_t>(-1))
+-	      {
+-		__ret = error;
+-		break;
+-	      }
+-	    else if (__conv > static_cast<size_t>(__to_end - __to))
+-	      {
+-		__ret = partial;
+-		break;
+-	      }
+-	    
+-	    memcpy(__to, __buf, __conv);
+-	    __state = __tmp_state;
+-	    __to += __conv;
+-	    __from++;
+-	  }
++    result ret = ok;
++    state_type tmp_state(state);
++
++    locale_t const old = uselocale((locale_t) _M_c_locale_codecvt);
++
++    for (src = src0, dst = dst0; src < srcN && dst < dstN && ret == ok;) {
++      const intern_type* srcNext = wmemchr(src, L'\0', srcN - src);
++      if (!srcNext) srcNext = srcN;
++
++      src0 = src;
++      const size_t conv = wcsnrtombs(dst, &src, srcNext - src, dstN - dst, &state);
++      if (conv == static_cast<size_t>(-1)) {
++        for (; src0 < src; ++src0)
++          dst += wcrtomb(dst, *src0, &tmp_state);
++        state = tmp_state;
++        ret = error;
++      } else if (src && src < srcNext) {
++        dst += conv;
++        ret = partial;
++      } else {
++        src = srcNext;
++        dst += conv;
+       }
+ 
+-    if (__ret == ok && __from < __from_end)
+-      __ret = partial;
++      if (src < srcN && ret == ok) {
++        extern_type buf[MB_LEN_MAX];
++        tmp_state = state;
++        const size_t conv2 = wcrtomb(buf, *src, &tmp_state);
++        if (conv2 > static_cast<size_t>(dstN - dst))
++          ret = partial;
++        else {
++          memcpy(dst, buf, conv2);
++          state = tmp_state;
++          dst += conv2;
++          ++src;
++        }
++      }
++    }
++
++    uselocale(old);
+ 
+-    __from_next = __from;
+-    __to_next = __to;
+-    return __ret; 
++    return ret;
+   }
+-  
+-  codecvt_base::result
+-  codecvt<wchar_t, char, mbstate_t>::
+-  do_in(state_type& __state, const extern_type* __from, 
+-	const extern_type* __from_end, const extern_type*& __from_next,
+-	intern_type* __to, intern_type* __to_end,
+-	intern_type*& __to_next) const
++
++  codecvt_base::result codecvt<wchar_t, char, mbstate_t>::do_in(
++    state_type& state, const extern_type* src0,
++    const extern_type* srcN, const extern_type*& src,
++    intern_type* dst0, intern_type* dstN,
++    intern_type*& dst) const
+   {
+-    result __ret = ok;
+-    // This temporary state object is necessary so __state won't be modified
+-    // if [__from, __from_end) is a partial multibyte character.
+-    state_type __tmp_state(__state);
+-
+-    // Conversion must be done by calling mbrtowc in a loop rather than
+-    // by calling mbsrtowcs because mbsrtowcs assumes that the input
+-    // sequence is zero-terminated.
+-    while (__from < __from_end && __to < __to_end)
+-      {
+-	size_t __conv = mbrtowc(__to, __from, __from_end - __from,
+-				&__tmp_state);
+-	if (__conv == static_cast<size_t>(-1))
+-	  {
+-	    __ret = error;
+-	    break;
+-	  }
+-	else if (__conv == static_cast<size_t>(-2))
+-	  {
+-	    // It is unclear what to return in this case (see DR 382).
+-	    __ret = partial;
+-	    break;
+-	  }
+-	else if (__conv == 0)
+-	  {
+-	    // XXX Probably wrong for stateful encodings
+-	    __conv = 1;
+-	    *__to = L'\0';
+-	  }
+-
+-	__state = __tmp_state;
+-	__to++;
+-	__from += __conv;
++    result ret = ok;
++    state_type tmp_state(state);
++
++    locale_t const old = uselocale((locale_t) _M_c_locale_codecvt);
++
++    for (src = src0, dst = dst0; src < srcN && dst < dstN && ret == ok;) {
++      const extern_type* srcNext;
++      srcNext = (const extern_type*) memchr(src, '\0', srcN - src);
++      if (!srcNext) srcNext = srcN;
++
++      src0 = src;
++      size_t conv = mbsnrtowcs(dst, &src, srcNext - src, dstN - dst, &state);
++      if (conv == (size_t) -1) {
++        for (;; ++dst, src0 += conv) {
++          conv = mbrtowc(dst, src0, srcN - src0, &tmp_state);
++          if (conv == (size_t) -1 || conv == (size_t) -2) break;
++        }
++        src = src0;
++        state = tmp_state;
++        ret = error;
++      } else if (src && src < srcNext) {
++        dst += conv;
++        ret = partial;
++      } else {
++        src = srcNext;
++        dst += conv;
+       }
+ 
+-    // It is not clear that __from < __from_end implies __ret != ok
+-    // (see DR 382).
+-    if (__ret == ok && __from < __from_end)
+-      __ret = partial;
++      if (src < srcN && ret == ok) {
++        if (dst < dstN) {
++          tmp_state = state;
++          ++src;
++          *dst++ = L'\0';
++        } else
++          ret = partial;
++      }
++    }
+ 
+-    __from_next = __from;
+-    __to_next = __to;
+-    return __ret; 
++    uselocale(old);
++
++    return ret;
+   }
+ 
+-  int 
+-  codecvt<wchar_t, char, mbstate_t>::
+-  do_encoding() const throw()
+-  {
+-    // XXX This implementation assumes that the encoding is
+-    // stateless and is either single-byte or variable-width.
+-    int __ret = 0;
+-    if (MB_CUR_MAX == 1)
+-      __ret = 1;
+-    return __ret;
+-  }  
+-
+-  int 
+-  codecvt<wchar_t, char, mbstate_t>::
+-  do_max_length() const throw()
+-  {
+-    // XXX Probably wrong for stateful encodings.
+-    int __ret = MB_CUR_MAX;
+-    return __ret;
++  int codecvt<wchar_t, char, mbstate_t>::do_encoding() const throw() {
++    int ret = 0;
++    locale_t const old = uselocale((locale_t) _M_c_locale_codecvt);
++    if (MB_CUR_MAX == 1) ret = 1; // Note: MB_CUR_MAX depends on current locale
++    uselocale(old);
++    return ret;
+   }
+-  
+-  int 
+-  codecvt<wchar_t, char, mbstate_t>::
+-  do_length(state_type& __state, const extern_type* __from,
+-	    const extern_type* __end, size_t __max) const
++
++  int codecvt<wchar_t, char, mbstate_t>::do_max_length() const throw() {
++    locale_t const old = uselocale((locale_t) _M_c_locale_codecvt);
++    int const ret = MB_CUR_MAX;
++    uselocale(old);
++    return ret;
++  }
++
++  int codecvt<wchar_t, char, mbstate_t>::do_length(
++    state_type& state, const extern_type* src, const extern_type* srcN, size_t max) const
+   {
+-    int __ret = 0;
+-    state_type __tmp_state(__state);
+-
+-    while (__from < __end && __max)
+-      {
+-	size_t __conv = mbrtowc(0, __from, __end - __from, &__tmp_state);
+-	if (__conv == static_cast<size_t>(-1))
+-	  {
+-	    // Invalid source character
+-	    break;
+-	  }
+-	else if (__conv == static_cast<size_t>(-2))
+-	  {
+-	    // Remainder of input does not form a complete destination
+-	    // character.
+-	    break;
+-	  }
+-	else if (__conv == 0)
+-	  {
+-	    // XXX Probably wrong for stateful encodings
+-	    __conv = 1;
+-	  }
+-
+-	__state = __tmp_state;
+-	__from += __conv;
+-	__ret += __conv;
+-	__max--;
++    int ret = 0;
++    state_type tmp_state(state);
++
++    locale_t old = uselocale((locale_t) _M_c_locale_codecvt);
++
++    wchar_t* dst = static_cast<wchar_t*>(__builtin_alloca(sizeof(wchar_t) * max));
++    while (src < srcN && max) {
++      const extern_type* srcNext;
++      srcNext = (const extern_type*) memchr(src, '\0', srcN - src);
++      if (!srcNext) srcNext = srcN;
++
++      const extern_type* tmp_src = src;
++      size_t conv = mbsnrtowcs(dst, &src, srcNext - src, max, &state);
++      if (conv == (size_t) -1) {
++        for (src = tmp_src;; src += conv) {
++          conv = mbrtowc(0, src, srcN - src, &tmp_state);
++          if (conv == (size_t) -1 || conv == (size_t) -2) break;
++        }
++        state = tmp_state;
++        ret += src - tmp_src;
++        break;
+       }
++      if (!src) src = srcNext;
++
++      ret += src - tmp_src;
++      max -= conv;
++
++      if (src < srcN && max) {
++        tmp_state = state;
++        ++src;
++        ++ret;
++        --max;
++      }
++    }
++
++    uselocale(old);
+ 
+-    return __ret; 
++    return ret;
+   }
+ #endif
+ 
