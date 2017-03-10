@@ -21,11 +21,11 @@ void test2full() {
 
   std::setlocale(LC_CTYPE, "ja_JP.cp932");
   std::wcout.imbue(std::locale("ja_JP.cp932"));
-  std::wcout << L"あいうえお" << std::endl;
+  std::wcout << L"あいうえお3" << std::endl;
 
   std::setlocale(LC_CTYPE, "ja_JP.EUC-JP");
   std::wcout.imbue(std::locale("ja_JP.EUC-JP"));
-  std::wcout << L"あいうえお" << std::endl;
+  std::wcout << L"あいうえお4" << std::endl;
 }
 
 void test2setlocale() {
@@ -35,9 +35,9 @@ void test2setlocale() {
   std::setlocale(LC_CTYPE, "ja_JP.UTF-8");
   std::wcout << L"あいうえお2" << std::endl;
   std::setlocale(LC_CTYPE, "ja_JP.cp932");
-  std::wcout << L"あいうえお" << std::endl;
+  std::wcout << L"あいうえお3" << std::endl;
   std::setlocale(LC_CTYPE, "ja_JP.EUC-JP");
-  std::wcout << L"あいうえお" << std::endl;
+  std::wcout << L"あいうえお4" << std::endl;
 }
 
 void test2imbue() {
@@ -49,9 +49,9 @@ void test2imbue() {
   std::wcout.imbue(std::locale("ja_JP.UTF-8"));
   std::wcout << L"あいうえお2" << std::endl;
   std::wcout.imbue(std::locale("ja_JP.cp932"));
-  std::wcout << L"あいうえお" << std::endl;
+  std::wcout << L"あいうえお3" << std::endl;
   std::wcout.imbue(std::locale("ja_JP.EUC-JP"));
-  std::wcout << L"あいうえお" << std::endl;
+  std::wcout << L"あいうえお4" << std::endl;
 }
 
 #include <cstdio>
@@ -92,13 +92,13 @@ void test3_write(std::wstring const& ws, std::locale const& loc) {
   }
 }
 void test3() {
-  test3_write(L"あいうえお", std::locale(""));
+  test3_write(L"あいうえお1", std::locale(""));
   std::fputc('\n', stdout);
-  test3_write(L"あいうえお", std::locale("ja_JP.UTF-8"));
+  test3_write(L"あいうえお2", std::locale("ja_JP.UTF-8"));
   std::fputc('\n', stdout);
-  test3_write(L"あいうえお", std::locale("ja_JP.EUC-JP"));
+  test3_write(L"あいうえお3", std::locale("ja_JP.EUC-JP"));
   std::fputc('\n', stdout);
-  test3_write(L"あいうえお", std::locale("ja_JP.cp932"));
+  test3_write(L"あいうえお4", std::locale("ja_JP.cp932"));
   std::fputc('\n', stdout);
 }
 
@@ -113,8 +113,8 @@ int main() {
 
   //test2full();
   //test2setlocale();
-  //test2imbue(); // basic_filebuf::_M_convert_to_external conversion error
+  test2imbue(); // basic_filebuf::_M_convert_to_external conversion error
   //test3();
 
-  return debug_mb_cur_max();
+  return 0;
 }
