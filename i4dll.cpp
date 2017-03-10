@@ -4,11 +4,11 @@
  *
  * Cygwin で `std::locale("")` や `std::locale("ja_JP.UTF-8")` をする。
  *
- * *使い方
+ * *使い方 (DLL にして使う場合)
  *
  * DLL は以下のようにして生成する。
  * &pre(!bash){
- * g++ -shared -O2 -s -o libstdcxx_locale_patch.dll i4dll.cpp
+ * g++ -shared -O2 -s -D USE_AS_DLL -o libstdcxx_locale_patch.dll i4dll.cpp
  * }
  *
  * プログラムの中では `use_libstdcxx_locale_patch()` (ダミーの関数) を何処かで呼び出す様にする。
@@ -28,6 +28,19 @@
  * 環境変数 `LD_LIBRARY_PATH=場所:...` を指定するか、
  * 実行ファイルと同じディレクトリに .dll を置く。
  *
+ * *使い方 (静的リンクして使う場合)
+ *
+ * この方法を取る場合は USE_LOCOBJ_COUNT は定義されていなければならない。
+ * 普通にコンパイルして .o ファイルを得る。
+ * main のプログラムでは以下のようにする。
+ * &pre(!cpp,title=program.cpp){
+ * int patch_libstdcxx_locale();
+ * int main() {
+ *   patch_libstdcxx_locale(); // 一番最初に呼び出す。
+ *   // 中身
+ * }
+ * }
+ *
  * *経緯
  *
  * Cygwin では `std::locale("")` すると `std::runtime_error` になる。
@@ -41,7 +54,7 @@
  * ソースコードを cygstdc++-6.dll と一緒に配布すれば良い気もするが、何か嫌だ。
  * 実のところ該当する関数だけ置き換えてリンクしてしまえば良いのではと考える。
  *
- * 所が、スタックトレースを見ると問題の関数は DLL (/usr/bin/cygstdc++-6.dll) の中で呼び出されている。
+ * 所が、スタックトレースを見ると問題の関数は DLL (/usr/bin/cygstdc++-6.dll) の内部で呼び出されている。
  *
  *   #12 0x498292c3 in cygstdc++-6!_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_ () from /usr/bin/cygstdc++-6.dll
  *   #13 0x49827569 in cygstdc++-6!_ZNSt6locale5_ImplC2EPKcj () from /usr/bin/cygstdc++-6.dll
@@ -50,7 +63,7 @@
  *
  * 問題の関数を内部で呼び出しているような関数は DLL から沢山エクスポートされている。
  * それらを全て置き換えるのは非現実的だ。
- * 仕方がないので関数の実体を動的に書き換える事にする。以下の関数を置き換える。
+ * 仕方がないので関数の実体の方を書き換える事にする。以下の関数を置き換える。
  *
  * - `std::locale::facet::_S_create_c_locale(int*&, char const*, int*)`
  * - `std::locale::facet::_S_destroy_c_locale(int*&)`
@@ -295,7 +308,7 @@ namespace std {
 
 namespace {
 
-  static void atomic_write64(uint64_t volatile* const target, uint64_t const value) {
+  void atomic_write64(uint64_t volatile* const target, uint64_t const value) {
 #if !defined(__clang__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 1)) || defined(__clang__)
     //
     // __sync_bool_compare_and_swap を使う
@@ -344,7 +357,7 @@ namespace {
 #endif
   }
 
-  static bool patch_function(void* ptarget, void* preplace) {
+  bool patch_function(void* ptarget, void* preplace) {
     bool result = false;
 
     // 16 bytes で align されているっぽいので仮定してしまう。
@@ -366,54 +379,119 @@ namespace {
     return result;
   }
 
-  static void error_throw() {
-    throw std::runtime_error("failed to patch libstdc++-6 locale");
-  }
-  static void error_exit(const char* name) {
-    // 中途半端な状態で失敗したらもう死ぬしか無い。
-    std::fprintf(stderr, "libstdcxx_locale_patch (%s): failed to patch; exiting\n", name);
-    std::exit(EXIT_FAILURE);
-  }
+  class libstdcxx_patcher {
+    int patch_count;
+    HMODULE const cygstdcxxDll;
 
-  static bool patch_symbol(HMODULE targetDll, HMODULE replaceDll, const char* symbol, bool forceUpdate = true) {
-    FARPROC const targetProc  = ::GetProcAddress(targetDll , symbol);
-    FARPROC const replaceProc = ::GetProcAddress(replaceDll, symbol);
-    if (!targetProc) return !forceUpdate;
-    if (!replaceProc) return false;
-    return patch_function((void*) targetProc, (void*) replaceProc);
-  }
+  public:
+    libstdcxx_patcher():
+      patch_count(0),
+      cygstdcxxDll(::GetModuleHandle("cygstdc++-6.dll")) {}
 
-  static void patch_libstdcxx_locale(HMODULE hInstanceDll) {
-    ::HMODULE const cygstdcxxDll = ::GetModuleHandle("cygstdc++-6.dll");
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_")) error_throw();
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet19_S_destroy_c_localeERPi"     )) error_exit("_S_destroy_c_locale");
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet17_S_clone_c_localeERPi"       )) error_exit("_S_clone_c_locale");
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  ), false) error_exit("_S_lc_ctype_c_locale");
+  private:
+    void check(const char* symbol, bool result) {
+      patch_count++;
+      if (!result) {
+        if (patch_count == 1) {
+          throw std::runtime_error("failed to patch libstdc++-6 locale");
+        } else {
+          // 中途半端な状態で失敗したらもう死ぬしか無い。
+          std::fprintf(stderr, "libstdcxx_locale_patch (%s): failed to patch; exiting\n", symbol);
+          std::exit(EXIT_FAILURE);
+        }
+      }
+    }
 
+  public:
+    template<typename F>
+    void patch_symbol(const char* symbol, F* replaceProc, bool forceUpdate = true) {
+      bool done;
+      FARPROC const targetProc = ::GetProcAddress(cygstdcxxDll, symbol);
+      if (!targetProc)
+        done = !forceUpdate;
+      else
+        done = ::patch_function((void*) targetProc, (void*) replaceProc);
+      check(symbol, done);
+    }
+
+    bool patch_symbol(const char* symbol, HMODULE replaceDll, bool forceUpdate = true) {
+      bool done;
+      FARPROC const targetProc  = ::GetProcAddress(cygstdcxxDll, symbol);
+      FARPROC const replaceProc = ::GetProcAddress(replaceDll  , symbol);
+      if (!targetProc)
+        done = !forceUpdate;
+      if (!replaceProc)
+        done = false;
+      else
+        done = patch_function((void*) targetProc, (void*) replaceProc);
+      check(symbol, done);
+    }
+  };
+
+  struct patch_libstdcxx_locale_impl1: std::locale::facet {
+    static void patch(libstdcxx_patcher& patcher, HMODULE hInstanceDll) {
+      patcher.patch_symbol("_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_", hInstanceDll);
+      patcher.patch_symbol("_ZNSt6locale5facet19_S_destroy_c_localeERPi"     , hInstanceDll);
+      patcher.patch_symbol("_ZNSt6locale5facet17_S_clone_c_localeERPi"       , hInstanceDll);
+      patcher.patch_symbol("_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  , hInstanceDll, false);
+    }
+    static void patch(libstdcxx_patcher& patcher) {
+      patcher.patch_symbol("_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_", &std::locale::facet::_S_create_c_locale  );
+      patcher.patch_symbol("_ZNSt6locale5facet19_S_destroy_c_localeERPi"     , &std::locale::facet::_S_destroy_c_locale );
+      patcher.patch_symbol("_ZNSt6locale5facet17_S_clone_c_localeERPi"       , &std::locale::facet::_S_clone_c_locale   );
+      patcher.patch_symbol("_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  , &std::locale::facet::_S_lc_ctype_c_locale, false);
+    }
+  };
+
+  struct patch_libstdcxx_locale_impl2: std::__timepunct<char> {
 #ifdef USE_LOCOBJ_COUNT
     // USE_LOCOBJ_COUNT であっても、しないよりはする方がまし。
-    patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt11__timepunctIcE23_M_initialize_timepunctEPi");
-    patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPiPKcbj");
-    patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPiPKcbj");
-    patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPKcbj"  );
-    patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPKcbj"  );
+    static const bool force_update = false;
 #else
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt11__timepunctIcE23_M_initialize_timepunctEPi")) error_exit("__timepunct::__timepunct");
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPiPKcbj")) error_exit("ctype::ctype");
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPiPKcbj")) error_exit("ctype::ctype");
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC1EPKcbj"  )) error_exit("ctype::ctype");
-    if (!patch_symbol(cygstdcxxDll, hInstanceDll, "_ZNSt5ctypeIcEC2EPKcbj"  )) error_exit("ctype::ctype");
+    static const bool force_update = false;
 #endif
-  }
+
+    static void patch(libstdcxx_patcher& patcher, HMODULE hInstanceDll) {
+      // USE_LOCOBJ_COUNT であっても、しないよりはする方がまし。
+      patcher.patch_symbol("_ZNSt11__timepunctIcE23_M_initialize_timepunctEPi", hInstanceDll, force_update);
+      patcher.patch_symbol("_ZNSt5ctypeIcEC1EPiPKcbj", hInstanceDll, force_update);
+      patcher.patch_symbol("_ZNSt5ctypeIcEC2EPiPKcbj", hInstanceDll, force_update);
+      patcher.patch_symbol("_ZNSt5ctypeIcEC1EPKcbj"  , hInstanceDll, force_update);
+      patcher.patch_symbol("_ZNSt5ctypeIcEC2EPKcbj"  , hInstanceDll, force_update);
+    }
+    static void patch(libstdcxx_patcher& patcher) {
+      //※protected なのに何故か触れない。何故だろう。
+      // patcher.patch_symbol("_ZNSt11__timepunctIcE23_M_initialize_timepunctEPi", &std::__timepunct<char>::_M_initialize_timepunct, force_update);
+
+      // ※残念ながらコンストラクタへのポインタは取得できない。
+      // ctype<char>::ctype(__c_locale, const mask* table, bool del, size_t refs)
+      // ctype<char>::ctype(const mask* table, bool del, size_t refs)
+    }
+  };
 }
 
+#ifdef USE_AS_DLL
 extern "C" BOOL WINAPI DllMain(HMODULE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
   switch (fdwReason) {
   case DLL_PROCESS_ATTACH:
-    patch_libstdcxx_locale(hinstDLL);
+    {
+      libstdcxx_patcher patcher;
+      patch_libstdcxx_locale_impl1::patch(patcher, hinstDLL);
+      patch_libstdcxx_locale_impl2::patch(patcher, hinstDLL);
+    }
     break;
   }
   return TRUE;
 }
 
 int use_libstdcxx_locale_patch() {return 0;}
+
+#else
+int patch_libstdcxx_locale() {
+  libstdcxx_patcher patcher;
+  patch_libstdcxx_locale_impl1::patch(patcher);
+  patch_libstdcxx_locale_impl2::patch(patcher);
+  return 0;
+}
+
+#endif
