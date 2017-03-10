@@ -92,6 +92,8 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <limits.h>
 #include <locale.h>
 
 #include <cstdio>
@@ -208,6 +210,163 @@ namespace std {
     std::fflush(stderr);
 #endif
     return (__c_locale) result;
+  }
+
+  codecvt_base::result codecvt<wchar_t, char, mbstate_t>::do_out(
+    state_type& state, const intern_type* src0,
+    const intern_type* srcN, const intern_type*& src,
+    extern_type* dst0, extern_type* dstN,
+    extern_type*& dst) const
+  {
+    result ret = ok;
+    state_type tmp_state(state);
+
+    locale_t const old = uselocale((locale_t) _M_c_locale_codecvt);
+
+    for (src = src0, dst = dst0; src < srcN && dst < dstN && ret == ok;) {
+      const intern_type* srcNext = wmemchr(src, L'\0', srcN - src);
+      if (!srcNext) srcNext = srcN;
+
+      src0 = src;
+      const size_t conv = wcsnrtombs(dst, &src, srcNext - src, dstN - dst, &state);
+      if (conv == static_cast<size_t>(-1)) {
+        for (; src0 < src; ++src0)
+          dst += wcrtomb(dst, *src0, &tmp_state);
+        state = tmp_state;
+        ret = error;
+      } else if (src && src < srcNext) {
+        dst += conv;
+        ret = partial;
+      } else {
+        src = srcNext;
+        dst += conv;
+      }
+
+      if (src < srcN && ret == ok) {
+        extern_type buf[MB_LEN_MAX];
+        tmp_state = state;
+        const size_t conv2 = wcrtomb(buf, *src, &tmp_state);
+        if (conv2 > static_cast<size_t>(dstN - dst))
+          ret = partial;
+        else {
+          memcpy(dst, buf, conv2);
+          state = tmp_state;
+          dst += conv2;
+          ++src;
+        }
+      }
+    }
+
+    uselocale(old);
+
+    return ret;
+  }
+
+  codecvt_base::result codecvt<wchar_t, char, mbstate_t>::do_in(
+    state_type& state, const extern_type* src0,
+    const extern_type* srcN, const extern_type*& src,
+    intern_type* dst0, intern_type* dstN,
+    intern_type*& dst) const
+  {
+    result ret = ok;
+    state_type tmp_state(state);
+
+    locale_t const old = uselocale((locale_t) _M_c_locale_codecvt);
+
+    for (src = src0, dst = dst0; src < srcN && dst < dstN && ret == ok;) {
+      const extern_type* srcNext;
+      srcNext = (const extern_type*) memchr(src, '\0', srcN - src);
+      if (!srcNext) srcNext = srcN;
+
+      src0 = src;
+      size_t conv = mbsnrtowcs(dst, &src, srcNext - src, dstN - dst, &state);
+      if (conv == (size_t) -1) {
+        for (;; ++dst, src0 += conv) {
+          conv = mbrtowc(dst, src0, srcN - src0, &tmp_state);
+          if (conv == (size_t) -1 || conv == (size_t) -2) break;
+        }
+        src = src0;
+        state = tmp_state;
+        ret = error;
+      } else if (src && src < srcNext) {
+        dst += conv;
+        ret = partial;
+      } else {
+        src = srcNext;
+        dst += conv;
+      }
+
+      if (src < srcN && ret == ok) {
+        if (dst < dstN) {
+          tmp_state = state;
+          ++src;
+          *dst++ = L'\0';
+        } else
+          ret = partial;
+      }
+    }
+
+    uselocale(old);
+
+    return ret;
+  }
+
+  int codecvt<wchar_t, char, mbstate_t>::do_encoding() const throw() {
+    int ret = 0;
+    locale_t const old = uselocale((locale_t) _M_c_locale_codecvt);
+    if (MB_CUR_MAX == 1) ret = 1; // Note: MB_CUR_MAX depends on current locale
+    uselocale(old);
+    return ret;
+  }
+
+  int codecvt<wchar_t, char, mbstate_t>::do_max_length() const throw() {
+    locale_t const old = uselocale((locale_t) _M_c_locale_codecvt);
+    int const ret = MB_CUR_MAX;
+    uselocale(old);
+    return ret;
+  }
+
+  int codecvt<wchar_t, char, mbstate_t>::do_length(
+    state_type& state, const extern_type* src, const extern_type* srcN, size_t max) const
+  {
+    int ret = 0;
+    state_type tmp_state(state);
+
+    locale_t old = uselocale((locale_t) _M_c_locale_codecvt);
+
+    wchar_t* dst = static_cast<wchar_t*>(__builtin_alloca(sizeof(wchar_t) * max));
+    while (src < srcN && max) {
+      const extern_type* srcNext;
+      srcNext = (const extern_type*) memchr(src, '\0', srcN - src);
+      if (!srcNext) srcNext = srcN;
+
+      const extern_type* tmp_src = src;
+      size_t conv = mbsnrtowcs(dst, &src, srcNext - src, max, &state);
+      if (conv == (size_t) -1) {
+        for (src = tmp_src;; src += conv) {
+          conv = mbrtowc(0, src, srcN - src, &tmp_state);
+          if (conv == (size_t) -1 || conv == (size_t) -2) break;
+        }
+        state = tmp_state;
+        ret += src - tmp_src;
+        break;
+      }
+      if (!src) src = srcNext;
+
+      ret += src - tmp_src;
+      max -= conv;
+
+      if (src < srcN && max) {
+        tmp_state = state;
+        ++src;
+        ++ret;
+        --max;
+      }
+    }
+
+    uselocale(old);
+
+    return ret;
   }
 
   template<>
@@ -413,7 +572,11 @@ namespace {
         done = ::patch_function((void*) targetProc, (void*) replaceProc);
       check(symbol, done);
     }
-
+    template<typename T, typename C>
+    void patch_symbol(const char* symbol, T C::* replaceProc, bool forceUpdate = true) {
+      union { T C::*original; void* transformed; } proc = { replaceProc };
+      patch_symbol(symbol, proc.transformed, forceUpdate);
+    }
     bool patch_symbol(const char* symbol, HMODULE replaceDll, bool forceUpdate = true) {
       bool done;
       FARPROC const targetProc  = ::GetProcAddress(cygstdcxxDll, symbol);
@@ -440,6 +603,47 @@ namespace {
       patcher.patch_symbol("_ZNSt6locale5facet19_S_destroy_c_localeERPi"     , &std::locale::facet::_S_destroy_c_locale );
       patcher.patch_symbol("_ZNSt6locale5facet17_S_clone_c_localeERPi"       , &std::locale::facet::_S_clone_c_locale   );
       patcher.patch_symbol("_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  , &std::locale::facet::_S_lc_ctype_c_locale, false);
+    }
+  };
+  struct patch_libstdcxx_locale_impl3: std::codecvt<wchar_t, char, mbstate_t> {
+    typedef std::codecvt<wchar_t, char, mbstate_t> base;
+    typedef patch_libstdcxx_locale_impl3 self;
+    static void patch(libstdcxx_patcher& patcher, HMODULE hInstanceDll) {
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE6do_outERS0_PKwS4_RS4_PcS6_RS6_", hInstanceDll);
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE5do_inERS0_PKcS4_RS4_PwS6_RS6_" , hInstanceDll);
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE11do_encodingEv"                , hInstanceDll);
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE13do_max_lengthEv"              , hInstanceDll);
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE9do_lengthERS0_PKcS4_j"         , hInstanceDll);
+    }
+
+    // どうも protected な仮想関数のアドレスは取れない様だ。
+    // 呼び出せはするのでこのクラスにメンバ関数を実装する。
+    codecvt_base::result nonvirt_out(
+      state_type& state,
+      const intern_type* src0, const intern_type* srcN, const intern_type*& src,
+      extern_type* dst0, extern_type* dstN, extern_type*& dst) const
+    {
+      return base::do_out(state, src0, srcN, src, dst0, dstN, dst);
+    }
+    codecvt_base::result nonvirt_in(
+      state_type& state,
+      const extern_type* src0, const extern_type* srcN, const extern_type*& src,
+      intern_type* dst0, intern_type* dstN, intern_type*& dst) const
+    {
+      return base::do_in(state, src0, srcN, src, dst0, dstN, dst);
+    }
+    int nonvirt_encoding() const throw() { return base::do_encoding(); }
+    int nonvirt_max_length() const throw() { return base::do_max_length(); }
+    int nonvirt_length(state_type& state, const extern_type* src, const extern_type* srcN, size_t max) const {
+      return base::do_length(state, src, srcN, max);
+    }
+
+    static void patch(libstdcxx_patcher& patcher) {
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE6do_outERS0_PKwS4_RS4_PcS6_RS6_", &self::nonvirt_in        );
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE5do_inERS0_PKcS4_RS4_PwS6_RS6_" , &self::nonvirt_out       );
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE11do_encodingEv"                , &self::nonvirt_encoding  );
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE13do_max_lengthEv"              , &self::nonvirt_max_length);
+      patcher.patch_symbol("_ZNKSt7codecvtIwc10_mbstate_tE9do_lengthERS0_PKcS4_j"         , &self::nonvirt_length    );
     }
   };
 
