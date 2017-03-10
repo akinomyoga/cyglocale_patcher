@@ -1,0 +1,337 @@
+diff --git a/include/bits/time_members.h b/include/bits/time_members.h
+index 1f6f02d..5fa2e22 100644
+--- a/include/bits/time_members.h
++++ b/include/bits/time_members.h
+@@ -34,13 +34,15 @@
+ 
+ // Written by Benjamin Kosnik <bkoz@redhat.com>
+ 
++#include <cstdio>
++
+ namespace std _GLIBCXX_VISIBILITY(default)
+ {
+ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+ 
+   template<typename _CharT>
+     __timepunct<_CharT>::__timepunct(size_t __refs) 
+-    : facet(__refs), _M_data(0)
++    : facet(__refs), _M_data(0), _M_c_locale_timepunct(0)
+     { 
+       _M_name_timepunct = _S_get_c_name();
+       _M_initialize_timepunct(); 
+@@ -48,7 +50,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+ 
+   template<typename _CharT>
+     __timepunct<_CharT>::__timepunct(__cache_type* __cache, size_t __refs) 
+-    : facet(__refs), _M_data(__cache)
++    : facet(__refs), _M_data(__cache), _M_c_locale_timepunct(0)
+     { 
+       _M_name_timepunct = _S_get_c_name();
+       _M_initialize_timepunct(); 
+@@ -57,7 +59,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+   template<typename _CharT>
+     __timepunct<_CharT>::__timepunct(__c_locale __cloc, const char* __s, 
+ 				     size_t __refs) 
+-    : facet(__refs), _M_data(0)
++    : facet(__refs), _M_data(0), _M_c_locale_timepunct(0)
+     {
+       if (__builtin_strcmp(__s, _S_get_c_name()) != 0)
+ 	{
+diff --git a/src/c++11/ctype_configure_char.cc b/src/c++11/ctype_configure_char.cc
+index af9767e..2d6f77d 100644
+--- a/src/c++11/ctype_configure_char.cc
++++ b/src/c++11/ctype_configure_char.cc
+@@ -44,7 +44,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+ 
+   ctype<char>::ctype(__c_locale, const mask* __table, bool __del,
+ 		     size_t __refs)
+-  : facet(__refs), _M_del(__table != 0 && __del),
++  : facet(__refs),
++  _M_c_locale_ctype(_S_get_c_locale()),
++  _M_del(__table != 0 && __del),
+   _M_toupper(NULL), _M_tolower(NULL),
+   _M_table(__table ? __table : classic_table())
+   {
+@@ -55,7 +57,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+   }
+ 
+   ctype<char>::ctype(const mask* __table, bool __del, size_t __refs)
+-  : facet(__refs), _M_del(__table != 0 && __del),
++  : facet(__refs),
++  _M_c_locale_ctype(_S_get_c_locale()),
++  _M_del(__table != 0 && __del),
+   _M_toupper(NULL), _M_tolower(NULL),
+   _M_table(__table ? __table : classic_table())
+   {
+diff --git a/src/c++98/c++locale.cc b/src/c++98/c++locale.cc
+index 6da5f22..4f0531a 100644
+--- a/src/c++98/c++locale.cc
++++ b/src/c++98/c++locale.cc
+@@ -40,195 +40,93 @@
+ #include <ieeefp.h>
+ #endif
+ 
++#include <stdlib.h>
++#include <locale.h>
++
++extern "C" double strtod_l(const char * __restrict__ nptr, char ** __restrict__ endptr, locale_t loc);
++extern "C" float strtof_l(const char * __restrict__ nptr, char ** __restrict__ endptr, locale_t loc);
++extern "C" long double strtold_l(const char * __restrict__ nptr, char ** __restrict__ endptr, locale_t loc);
++
+ namespace std _GLIBCXX_VISIBILITY(default)
+ {
+ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+ 
+-  template<>
+-    void
+-    __convert_to_v(const char* __s, float& __v, ios_base::iostate& __err,
+-		   const __c_locale&) throw()
+-    {
+-      // Assumes __s formatted for "C" locale.
+-      char* __old = setlocale(LC_ALL, 0);
+-      const size_t __len = strlen(__old) + 1;
+-      char* __sav = new char[__len];
+-      memcpy(__sav, __old, __len);
+-      setlocale(LC_ALL, "C");
+-      char* __sanity;
+-      bool __overflow = false;
+-
+-#if !__FLT_HAS_INFINITY__
+-      errno = 0;
+-#endif
+-
+-#ifdef _GLIBCXX_HAVE_STRTOF
+-      __v = strtof(__s, &__sanity);
+-#else
+-      double __d = strtod(__s, &__sanity);
+-      __v = static_cast<float>(__d);
+-#ifdef _GLIBCXX_HAVE_FINITEF
+-      if (!finitef (__v))
+-	__overflow = true;
+-#elif defined (_GLIBCXX_HAVE_FINITE)
+-      if (!finite (static_cast<double> (__v)))
+-	__overflow = true;
+-#elif defined (_GLIBCXX_HAVE_ISINF)
+-      if (isinf (static_cast<double> (__v)))
+-	__overflow = true;
+-#else
+-      if (fabs(__d) > numeric_limits<float>::max())
+-	__overflow = true;
+-#endif
+-#endif // _GLIBCXX_HAVE_STRTOF
+-
+-      // _GLIBCXX_RESOLVE_LIB_DEFECTS
+-      // 23. Num_get overflow result.
+-      if (__sanity == __s || *__sanity != '\0')
+-	{
+-	  __v = 0.0f;
+-	  __err = ios_base::failbit;
+-	}
+-      else if (__overflow
+-#if __FLT_HAS_INFINITY__
+-	       || __v == numeric_limits<float>::infinity()
+-	       || __v == -numeric_limits<float>::infinity()
+-#else
+-	       || ((__v > 1.0f || __v < -1.0f) && errno == ERANGE)
+-#endif
+-	      )
+-	{
+-	  if (__v > 0.0f)
+-	    __v = numeric_limits<float>::max();
+-	  else
+-	    __v = -numeric_limits<float>::max();
+-	  __err = ios_base::failbit;
+-	}
+-
+-      setlocale(LC_ALL, __sav);
+-      delete [] __sav;
++namespace {
++  template<typename T> T strtox_l(const char* s, char** psanity, const ::locale_t& locobj);
++  template<> float       strtox_l(const char* s, char** psanity, const ::locale_t& locobj) { return strtof_l (s, psanity, locobj); }
++  template<> double      strtox_l(const char* s, char** psanity, const ::locale_t& locobj) { return strtod_l (s, psanity, locobj); }
++  template<> long double strtox_l(const char* s, char** psanity, const ::locale_t& locobj) { return strtold_l(s, psanity, locobj); }
++
++  template<typename T>
++  void convert_to_v(const char* s, T& v, ios_base::iostate& err, const __c_locale& locobj) {
++    char* sanity;
++    v = strtox_l<T>(s, &sanity, (::locale_t) locobj);
++
++    if (sanity == s || *sanity != '\0') {
++      v = 0.0f;
++      err = ios_base::failbit;
++    } else if (v == numeric_limits<T>::infinity()) {
++      v = numeric_limits<T>::max();
++      err = ios_base::failbit;
++    } else if (v == -numeric_limits<T>::infinity()) {
++      v = -numeric_limits<T>::max();
++      err = ios_base::failbit;
+     }
+-
+-  template<>
+-    void
+-    __convert_to_v(const char* __s, double& __v, ios_base::iostate& __err,
+-		   const __c_locale&) throw()
+-    {
+-      // Assumes __s formatted for "C" locale.
+-      char* __old = setlocale(LC_ALL, 0);
+-      const size_t __len = strlen(__old) + 1;
+-      char* __sav = new char[__len];
+-      memcpy(__sav, __old, __len);
+-      setlocale(LC_ALL, "C");
+-      char* __sanity;
+-
+-#if !__DBL_HAS_INFINITY__
+-      errno = 0;
++  }
++}
++
++template<>
++void __convert_to_v(const char* s, float& v, ios_base::iostate& err, const __c_locale& locobj) throw() {
++  return convert_to_v(s, v, err, locobj);
++}
++
++template<>
++void __convert_to_v(const char* s, double& v, ios_base::iostate& err, const __c_locale& locobj) throw() {
++  return convert_to_v(s, v, err, locobj);
++}
++
++template<>
++void __convert_to_v(const char* s, long double& v, ios_base::iostate& err, const __c_locale& locobj) throw() {
++  return convert_to_v(s, v, err, locobj);
++}
++
++#if (__GLIBC__ < 2 || __GLIBC__ == 2 && __GLIBC_MINOR__ <= 2)
++# ifndef LC_CTYPE_MASK
++#  define LC_CTYPE_MASK (1 << LC_CTYPE)
++# endif
+ #endif
+ 
+-      __v = strtod(__s, &__sanity);
+-
+-      // _GLIBCXX_RESOLVE_LIB_DEFECTS
+-      // 23. Num_get overflow result.
+-      if (__sanity == __s || *__sanity != '\0')
+-	{
+-	  __v = 0.0;
+-	  __err = ios_base::failbit;
+-	}
+-      else if (
+-#if __DBL_HAS_INFINITY__
+-	       __v == numeric_limits<double>::infinity()
+-	       || __v == -numeric_limits<double>::infinity())
+-#else
+-	       (__v > 1.0 || __v < -1.0) && errno == ERANGE)
+-#endif
+-	{
+-	  if (__v > 0.0)
+-	    __v = numeric_limits<double>::max();
+-	  else
+-	    __v = -numeric_limits<double>::max();
+-	  __err = ios_base::failbit;
+-	}
+-
+-      setlocale(LC_ALL, __sav);
+-      delete [] __sav;
+-    }
++  void locale::facet::_S_create_c_locale(__c_locale& locobj, const char* locstr, __c_locale base) {
++    if (!(locobj = (__c_locale) ::newlocale(1 << LC_ALL, locstr, (::locale_t) base)))
++      throw std::runtime_error("std::locale::facet::_S_create_c_locale(__c_local, const char*, __clocale): failed");
++  }
+ 
+-  template<>
+-    void
+-    __convert_to_v(const char* __s, long double& __v,
+-		   ios_base::iostate& __err, const __c_locale&) throw()
+-    {
+-      // Assumes __s formatted for "C" locale.
+-      char* __old = setlocale(LC_ALL, 0);
+-      const size_t __len = strlen(__old) + 1;
+-      char* __sav = new char[__len];
+-      memcpy(__sav, __old, __len);
+-      setlocale(LC_ALL, "C");
+-
+-#if !__LDBL_HAS_INFINITY__
+-      errno = 0;
+-#endif
++  void locale::facet::_S_destroy_c_locale(__c_locale& locobj) {
++    if (locobj && _S_get_c_locale() != locobj) {
++      ::freelocale((::locale_t) locobj);
++    }
++  }
+ 
+-#if defined(_GLIBCXX_HAVE_STRTOLD) && !defined(_GLIBCXX_HAVE_BROKEN_STRTOLD)
+-      char* __sanity;
+-      __v = strtold(__s, &__sanity);
++  __c_locale locale::facet::_S_clone_c_locale(__c_locale& locobj) throw() {
++    locale_t ret = duplocale((locale_t) locobj);
++    return (__c_locale) ret;
++  }
+ 
+-      // _GLIBCXX_RESOLVE_LIB_DEFECTS
+-      // 23. Num_get overflow result.
+-      if (__sanity == __s || *__sanity != '\0')
+-#else
+-      typedef char_traits<char>::int_type int_type;
+-      int __p = sscanf(__s, "%Lf", &__v);
++  __c_locale locale::facet::_S_lc_ctype_c_locale(__c_locale locobj, const char* locstr) {
++    ::locale_t const base = ::duplocale((::locale_t) locobj);
++    if (!base) {
++      throw std::runtime_error("std::locale::facet::_S_lc_ctype_c_locale(__clocale, const char*): failed in duplocale");
++    }
+ 
+-      if (!__p || static_cast<int_type>(__p) == char_traits<char>::eof())
+-#endif
+-	{
+-	  __v = 0.0l;
+-	  __err = ios_base::failbit;
+-	}
+-       else if (
+-#if __LDBL_HAS_INFINITY__
+-		__v == numeric_limits<long double>::infinity()
+-		|| __v == -numeric_limits<long double>::infinity())
+-#else
+-		(__v > 1.0l || __v < -1.0l) && errno == ERANGE)
+-#endif
+-	{
+-	  if (__v > 0.0l)
+-	    __v = numeric_limits<long double>::max();
+-	  else
+-	    __v = -numeric_limits<long double>::max();
+-	  __err = ios_base::failbit;
+-	}
+-
+-      setlocale(LC_ALL, __sav);
+-      delete [] __sav;
++    ::locale_t const result = ::newlocale(LC_CTYPE_MASK, locstr, base);
++    if (!result) {
++      ::freelocale(base);
++      throw std::runtime_error("std::locale::facet::_S_lc_ctype_c_locale(__clocale, const char*): failed in newlocale");
+     }
+ 
+-  void
+-  locale::facet::_S_create_c_locale(__c_locale& __cloc, const char* __s,
+-				    __c_locale)
+-  {
+-    // Currently, the generic model only supports the "C" locale.
+-    // See http://gcc.gnu.org/ml/libstdc++/2003-02/msg00345.html
+-    __cloc = 0;
+-    if (strcmp(__s, "C"))
+-      __throw_runtime_error(__N("locale::facet::_S_create_c_locale "
+-			    "name not valid"));
++    return (__c_locale) result;
+   }
+ 
+-  void
+-  locale::facet::_S_destroy_c_locale(__c_locale& __cloc)
+-  { __cloc = 0; }
+-
+-  __c_locale
+-  locale::facet::_S_clone_c_locale(__c_locale&) throw()
+-  { return __c_locale(); }
+-
+-  __c_locale
+-  locale::facet::_S_lc_ctype_c_locale(__c_locale, const char*)
+-  { return __c_locale(); }
+ 
+ _GLIBCXX_END_NAMESPACE_VERSION
+ } // namespace
