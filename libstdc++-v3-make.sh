@@ -1,7 +1,11 @@
 #!/bin/bash
 
-# gcc の
-tar xvf gcc-5.4.0.tar.gz --exclude=gcc/testsuite --exclude=libjava
+[[ -d ext ]] || mkdir -p ext
+cd ext
+[[ -s gcc-5.4.0.tar.gz ]] || wget https://ftp.gnu.org/gnu/gcc/gcc-5.4.0/gcc-5.4.0.tar.gz
+
+# gcc の中の libstdc++-v3 を修正してコンパイルする。
+tar xzvf gcc-5.4.0.tar.gz --exclude=gcc/testsuite --exclude=libjava
 cd gcc-5.4.0/libstdc++-v3
 CFLAGS='-O2 -g' CXXFLAGS='-O2 -g' ./configure --prefix=$HOME/opt/libstdc++-6
 
