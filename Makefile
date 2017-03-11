@@ -12,15 +12,15 @@ demangle: demangle.o
 sample1.exe: sample1.o
 	g++ -g -o $@ $^
 
-all: libstdcxx_locale_patch.dll
-libstdcxx_locale_patch.dll: patcher.cpp
+all: cyglocale_patcher.dll
+cyglocale_patcher.dll: patcher.cpp
 	g++ -O2 -s -shared -D USE_AS_DLL -o $@ $<
 
 all: sample1d.exe
 sample1d.o: sample1.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -D USE_PATCH_DLL -c -o $@ $<
-sample1d.exe: sample1d.o | libstdcxx_locale_patch.dll
-	$(CXX) -g -L . -o $@ $^ -lstdcxx_locale_patch
+sample1d.exe: sample1d.o cyglocale_patcher.dll
+	$(CXX) -g -L . -o $@ $< -lcyglocale_patcher
 
 all: sample1s.exe
 sample1s.o: sample1.cpp

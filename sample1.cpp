@@ -102,11 +102,8 @@ void test3() {
 
 int main() {
 #ifdef USE_PATCH_DLL
-  int use_libstdcxx_locale_patch();
+  bool use_libstdcxx_locale_patch();
   use_libstdcxx_locale_patch();
-#elif defined(USE_PATCH)
-  int patch_libstdcxx_locale();
-  patch_libstdcxx_locale();
 #endif
 
   //test2full();

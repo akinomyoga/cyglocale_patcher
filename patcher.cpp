@@ -1,6 +1,6 @@
 /*?lwiki
  *
- * *概要
+ * *patcher.cpp 概要
  *
  * Cygwin で `std::locale("")` や `std::locale("ja_JP.UTF-8")` をする。
  * このコードには GPLv3 をランタイムライブラリ例外つきで適用する。
@@ -29,22 +29,17 @@
  *
  * *使い方 (静的リンクして使う場合)
  *
- * この方法を採る場合は `USE_LOCOBJ_COUNT` は定義されていなければならない。
- * 普通にコンパイルして .o ファイルを得る。
- * main のプログラムでは以下のようにする。
- * &pre(!cpp,title=program.cpp){
- * int main() {
- *   int patch_libstdcxx_locale();
- *   patch_libstdcxx_locale(); // 一番最初に呼び出す。
- *   // 中身
- * }
- * }
+ * patcher.cpp を普通にコンパイルしてできる .o を一緒にリンクするだけ。
+ * 本体のプログラム側で特別な記述をする必要はない。
+ *
+ * ※この方法を採る場合はこのファイルの後の方にある様に、
+ * `USE_LOCOBJ_COUNT` は定義されていなければならない。
  *
  * *使い方 (DLL にして使う場合)
  *
  * DLL は以下のようにして生成する。
  * &pre(!bash){
- * g++ -shared -O2 -s -D USE_AS_DLL -o libstdcxx_locale_patch.dll patcher.cpp
+ * g++ -shared -O2 -s -D USE_AS_DLL -o cyglocale_patcher.dll patcher.cpp
  * }
  *
  * プログラムの中では `use_libstdcxx_locale_patch()` (ダミーの関数) を何処かで呼び出す様にする。
@@ -55,11 +50,11 @@
  * }
  * }
  *
- * コンパイル時は `libstdcxx_locale_patch.dll` をリンクする。
+ * コンパイル時は `cyglocale_patcher.dll` をリンクする。
  * &pre(!bash){
- * g++ -L . program.cpp -lstdcxx_locale_patch
+ * g++ -L . program.cpp -lcyglocale_patcher
  * }
- * 実行時は `libstdcxx_locale_patch.dll` が見つかる様にする。
+ * 実行時は `cyglocale_patcher.dll` が見つかる様にする。
  * コンパイル時に `-Wl,-rpath,場所` を指定するか、
  * 環境変数 `LD_LIBRARY_PATH=場所:...` を指定するか、
  * 実行ファイルと同じディレクトリに .dll を置く。
@@ -885,10 +880,10 @@ extern "C" BOOL WINAPI DllMain(HMODULE hinstDLL, DWORD fdwReason, LPVOID lpvRese
   return TRUE;
 }
 
-int use_libstdcxx_locale_patch() {return 0;}
+bool use_libstdcxx_locale_patch() {return 0;}
 
 #else
-int patch_libstdcxx_locale() {
+bool patch_libstdcxx_locale() {
   dll_patcher patcher("cygstdc++-6.dll");
   patch_libstdcxx_locale_impl1::patch(patcher);
   patch_libstdcxx_locale_impl2::patch(patcher);
@@ -896,5 +891,7 @@ int patch_libstdcxx_locale() {
   patch_duplocale();
   return 0;
 }
+
+static bool _dummy = patch_libstdcxx_locale();
 
 #endif
