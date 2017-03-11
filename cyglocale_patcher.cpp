@@ -32,9 +32,6 @@
  * patcher.cpp を普通にコンパイルしてできる .o を一緒にリンクするだけ。
  * 本体のプログラム側で特別な記述をする必要はない。
  *
- * ※この方法を採る場合はこのファイルの後の方にある様に、
- * `USE_LOCOBJ_COUNT` は定義されていなければならない。
- *
  * *使い方 (DLL にして使う場合)
  *
  * DLL は以下のようにして生成する。
@@ -128,16 +125,16 @@
  * @def #define USE_LOCOBJ_COUNT
  *
  * libstdc++-v3 自体に未初期化の変数を destroy に渡すという問題がある。
+ * 既知の未初期化の原因の関数についてはできるだけ上書きを行うが完全ではない。
+ *
  * `USE_LOCOBJ_COUNT` を定義すると、対策として `_S_create_c_locale` で生成した `locale_t` を記録し、
  * `_S_destroy_c_locale` では記録されている `locale_t` のみを削除するようにする。
  * 然しこの方法は完全ではない。たまたま仕様中の `locale_t` が未初期化の値に入っている可能性もあり、
  * その場合、未だ仕様中の `locale_t` が削除されてしまうという事態になり危険である。
  *
- * `USE_LOCOBJ_COUNT` が定義されていない場合は、既知の未初期化の原因の関数について上書きを行う。
- * しかし、この方法は自前で生成した cygstdc++-6.dll に対しては有効であったが、
- * どうやら Cygwin 付属の cygstdc++-6.dll に対しては有効ではないようだ。
- * 恐らく生成に使っているソースコードが違っていて、
- * 別の箇所でも未初期化のデータが生産されているという事になる。
+ * ※特に静的リンクで cyglocale_patcher.cpp を利用する場合は
+ * このマクロを定義しなければ動作しない。
+ * ctype コンストラクタに対する上書きができないためである。
  *
  * ''libstdc++v3 の問題''
  *
@@ -401,6 +398,8 @@ namespace std {
 
   template<>
   void __timepunct<char>::_M_initialize_timepunct(__c_locale) {
+    _M_c_locale_timepunct = 0;
+
     // "C" locale.
     if (!_M_data) _M_data = new __timepunct_cache<char>;
 
