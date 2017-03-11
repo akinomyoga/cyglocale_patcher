@@ -1,11 +1,49 @@
+#include <stdlib.h>
 #include <locale>
 #include <iostream>
+#include <stdexcept>
 
 void test1() {
   std::locale("");
   std::locale("ja_JP.UTF-8");
   std::locale("ja_JP.cp932");
   std::locale("ja_JP.EUC-JP");
+}
+
+void try_locale(const char* locstr) {
+  try {
+    std::locale(locstr);
+  } catch (std::runtime_error&) {
+    std::cerr << "failed in std::locale(\"" << locstr << "\")" << std::endl;
+  }
+}
+
+void test1b() {
+  std::cerr << "setting env to \"ja_JP.UTF-8\"" << std::endl;
+  ::setenv("LC_COLLATE",  "ja_JP.UTF-8", 1);
+  ::setenv("LC_CTYPE",    "ja_JP.UTF-8", 1);
+  ::setenv("LC_MESSAGES", "ja_JP.UTF-8", 1);
+  ::setenv("LC_MONETARY", "ja_JP.UTF-8", 1);
+  ::setenv("LC_NUMERIC",  "ja_JP.UTF-8", 1);
+  ::setenv("LC_TIME",     "ja_JP.UTF-8", 1);
+  try_locale("");
+
+  std::cerr << "setting env to \"\"" << std::endl;
+  ::setenv("LC_COLLATE",  "", 1);
+  ::setenv("LC_CTYPE",    "", 1);
+  ::setenv("LC_MESSAGES", "", 1);
+  ::setenv("LC_MONETARY", "", 1);
+  ::setenv("LC_NUMERIC",  "", 1);
+  ::setenv("LC_TIME",     "", 1);
+  try_locale("");
+}
+
+void test1c() {
+  try_locale("ja_JP.UTF-8");
+  try_locale(".UTF-8");
+  try_locale("Japanese_Japan.65001");
+  try_locale("ja-JP");
+  try_locale(".65001");
 }
 
 void test2full() {
