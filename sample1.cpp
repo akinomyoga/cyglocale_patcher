@@ -43,8 +43,6 @@ void test2setlocale() {
 void test2imbue() {
   std::ios_base::sync_with_stdio(false);
   std::wcout.imbue(std::locale(""));
-  std::wcout << L"あいうえお1";
-  std::flush(std::wcout);
   std::wcout << L"あいうえお1" << std::endl;
   std::wcout.imbue(std::locale("ja_JP.UTF-8"));
   std::wcout << L"あいうえお2" << std::endl;

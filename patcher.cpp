@@ -24,7 +24,7 @@
  * g++ -L . program.cpp -lstdcxx_locale_patch
  * }
  * 実行時は `libstdcxx_locale_patch.dll` が見つかる様にする。
- * コンパイル時に `-Wl,-RPATH,場所` を指定するか、
+ * コンパイル時に `-Wl,-rpath,場所` を指定するか、
  * 環境変数 `LD_LIBRARY_PATH=場所:...` を指定するか、
  * 実行ファイルと同じディレクトリに .dll を置く。
  *
@@ -133,13 +133,14 @@
 #define USE_LOCOBJ_COUNT
 
 /*?lwiki
- * @def #define USE_PRINT_ALLOC
+ * @def #define DEBUG_PRINT_LOCALE
  *
  * 定義されている時、`_S_destroy_c_locale` に変な値が渡される問題をデバグする為に、
  * `locale_t` の確保・解放を逐一出力する事を示す。
  *
  */
-#define USE_PRINT_ALLOC
+//#define DEBUG_PRINT_LOCALE
+//#define DEBUG_PATCH_DUPLOCALE
 
 #ifdef USE_LOCOBJ_COUNT
 # if __cplusplus >= 201103L
@@ -160,7 +161,7 @@ namespace std {
     allocatedList.erase((locale_t) base);
     allocatedList.insert((locale_t) locobj);
 #endif
-#ifdef USE_PRINT_ALLOC
+#ifdef DEBUG_PRINT_LOCALE
     std::fprintf(stderr, "new %p <-(%s)- %p\n", locobj, locstr, base);
     std::fflush(stderr);
 #endif
@@ -170,14 +171,14 @@ namespace std {
     if (locobj && _S_get_c_locale() != locobj) {
 #ifdef USE_LOCOBJ_COUNT
       if (allocatedList.erase((locale_t) locobj) == 0) {
-# ifdef USE_PRINT_ALLOC
+# ifdef DEBUG_PRINT_LOCALE
         std::fprintf(stderr, "ignore free %p\n", locobj);
         std::fflush(stderr);
 # endif
         return;
       }
 #endif
-#ifdef USE_PRINT_ALLOC
+#ifdef DEBUG_PRINT_LOCALE
       std::fprintf(stderr, "free %p\n", locobj);
       std::fflush(stderr);
 #endif
@@ -190,7 +191,7 @@ namespace std {
 #ifdef USE_LOCOBJ_COUNT
     allocatedList.insert(result);
 #endif
-#ifdef USE_PRINT_ALLOC
+#ifdef DEBUG_PRINT_LOCALE
     std::fprintf(stderr, "dup %p <- %p\n", result, locobj);
     std::fflush(stderr);
 #endif
@@ -212,7 +213,7 @@ namespace std {
 #ifdef USE_LOCOBJ_COUNT
     allocatedList.insert(result);
 #endif
-#ifdef USE_PRINT_ALLOC
+#ifdef DEBUG_PRINT_LOCALE
     std::fprintf(stderr, "ctype %p <-(%s)- %p\n", result, locstr, locobj);
     std::fflush(stderr);
 #endif
@@ -327,7 +328,7 @@ namespace std {
   }
 
   int codecvt<wchar_t, char, mbstate_t>::do_max_length() const throw() {
-#ifdef USE_PRINT_ALLOC
+#ifdef DEBUG_PRINT_LOCALE
     std::fprintf(stderr, "use %p\n", _M_c_locale_codecvt);
     std::fflush(stderr);
 #endif
@@ -534,7 +535,7 @@ namespace {
     // 16 bytes で align されているっぽいので仮定してしまう。
     if (ptarget && (uintptr_t) ptarget % 8 == 0) {
       DWORD old_protect;
-      ::VirtualProtect((LPVOID) ptarget, sizeof(void*), PAGE_EXECUTE_READWRITE, &old_protect);
+      ::VirtualProtect((LPVOID) ptarget, 8, PAGE_EXECUTE_READWRITE, &old_protect);
       int32_t const distance32 = (int32_t) ((intptr_t) preplace - (intptr_t) ptarget - 5);
       if ((intptr_t) preplace == ((intptr_t) ptarget + 5) + distance32) {
         uint64_t* const ptarget64 = (uint64_t*) ptarget;
@@ -544,7 +545,7 @@ namespace {
         atomic_write64(ptarget64, body.intval);
         result = true;
       }
-      ::VirtualProtect((LPVOID) ptarget, sizeof(void*), old_protect, &old_protect);
+      ::VirtualProtect((LPVOID) ptarget, 8, old_protect, &old_protect);
     }
     // else std::fprintf(stderr, "tgt=%p rep=%p\n", ptarget, preplace);
 
@@ -581,6 +582,7 @@ namespace {
   public:
     template<typename F>
     void patch_symbol(const char* symbol, F* replaceProc, bool forceUpdate = true) {
+      if (!targetDll) return; // no target dll: not cygwin?
       bool done;
       FARPROC const targetProc = ::GetProcAddress(targetDll, symbol);
       if (!targetProc)
@@ -595,6 +597,7 @@ namespace {
       patch_symbol(symbol, proc.transformed, forceUpdate);
     }
     bool patch_symbol(const char* symbol, HMODULE replaceDll, bool forceUpdate = true) {
+      if (!targetDll) return true; // no target dll: not cygwin?
       bool done;
       FARPROC const targetProc  = ::GetProcAddress(targetDll, symbol);
       FARPROC const replaceProc = ::GetProcAddress(replaceDll  , symbol);
@@ -609,17 +612,18 @@ namespace {
   };
 
   struct patch_libstdcxx_locale_impl1: std::locale::facet {
+    typedef std::locale::facet base;
     static void patch(dll_patcher& patcher, HMODULE hInstanceDll) {
       patcher.patch_symbol("_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_", hInstanceDll);
       patcher.patch_symbol("_ZNSt6locale5facet19_S_destroy_c_localeERPi"     , hInstanceDll);
       patcher.patch_symbol("_ZNSt6locale5facet17_S_clone_c_localeERPi"       , hInstanceDll);
-      patcher.patch_symbol("_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  , hInstanceDll, false);
+      patcher.patch_symbol("_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  , hInstanceDll, false); // 何故か拾えない?
     }
     static void patch(dll_patcher& patcher) {
-      patcher.patch_symbol("_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_", &std::locale::facet::_S_create_c_locale  );
-      patcher.patch_symbol("_ZNSt6locale5facet19_S_destroy_c_localeERPi"     , &std::locale::facet::_S_destroy_c_locale );
-      patcher.patch_symbol("_ZNSt6locale5facet17_S_clone_c_localeERPi"       , &std::locale::facet::_S_clone_c_locale   );
-      patcher.patch_symbol("_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  , &std::locale::facet::_S_lc_ctype_c_locale, false);
+      patcher.patch_symbol("_ZNSt6locale5facet18_S_create_c_localeERPiPKcS1_", &base::_S_create_c_locale  );
+      patcher.patch_symbol("_ZNSt6locale5facet19_S_destroy_c_localeERPi"     , &base::_S_destroy_c_locale );
+      patcher.patch_symbol("_ZNSt6locale5facet17_S_clone_c_localeERPi"       , &base::_S_clone_c_locale   );
+      patcher.patch_symbol("_ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc"  , &base::_S_lc_ctype_c_locale, false);
     }
   };
   struct patch_libstdcxx_locale_impl3: std::codecvt<wchar_t, char, mbstate_t> {
@@ -696,6 +700,152 @@ namespace {
       // ctype<char>::ctype(const mask* table, bool del, size_t refs)
     }
   };
+
+  struct scoped_virtual_protect {
+    LPVOID addr;
+    DWORD size;
+    DWORD old_protect;
+    scoped_virtual_protect(void* addr, DWORD size, DWORD protect): addr(addr), size(size) {
+      ::VirtualProtect((LPVOID) addr, size, protect, &old_protect);
+    }
+    ~scoped_virtual_protect() {
+      ::VirtualProtect((LPVOID) addr, size, old_protect, &old_protect);
+    }
+  };
+
+  typedef unsigned char byte;
+  typedef char* (loadlocale_t)(locale_t loc, int category, const char* new_locstr);
+
+  loadlocale_t* original_loadlocale = 0;
+  char* my_loadlocale(locale_t loc, int category, const char * new_locstr) {
+#ifdef DEBUG_PATCH_DUPLOCALE
+    std::fprintf(stderr, "__loadlocale %p\n", loc);
+#endif
+
+    std::string const save = new_locstr;
+    const_cast<char*>(new_locstr)[0] = '\0';
+    return original_loadlocale(loc, category, &save[0]);
+  }
+
+  // 関数 func の内容が data と一致しているか確認して、
+  // 一致していたら func の続きを指すポインタを取得する。
+  // 一致していなかったら 0 を返す。
+  // data の要素が 0xCC の値の時はその要素は一致しなくて良いとする。
+  template<int N>
+  uint32_t* skip_checked_prefix(byte* func, byte (&data)[N]) {
+    for (int i = 0; i < N; i++)
+      if (data[i] != 0xCC && func[i] != data[i])
+        goto fail;
+    return (uint32_t*) (func + N);
+
+  fail:
+#ifdef DEBUG_PATCH_DUPLOCALE
+    for (int i = 0; i < N; i++) {
+      if (data[i] != 0xCC && func[i] != data[i])
+        std::fprintf(stderr, " %02x", func[i]);
+      else
+        std::fprintf(stderr, " \x1b[1m%02x\x1b[m", func[i]);
+
+      if ((i + 1) % 16 == 0 || i + 1 == N)
+        std::fputc('\n', stderr);
+    }
+#endif
+    return 0;
+  }
+
+  bool patch_duplocale() {
+    HMODULE cygwinDll = ::GetModuleHandle("cygwin1.dll");
+    if (cygwinDll == NULL) return false; // fail: not cygwin?
+
+    byte* const duplocale_thunk = (byte*) ::GetProcAddress(cygwinDll, "duplocale");
+    if (!duplocale_thunk) return false;
+
+    // read IAT Entry
+#ifdef DEBUG_PATCH_DUPLOCALE
+    std::fprintf(stderr, "duplocale_thunk = %p\n", duplocale_thunk);
+#endif
+    byte* duplocale;
+    {
+      scoped_virtual_protect(duplocale_thunk, 5, PAGE_EXECUTE_READ);
+      if (duplocale_thunk[0] == 0x68)
+        duplocale = (byte*) *(uint32_t*) (duplocale_thunk + 1);
+      else
+        return false;
+    }
+
+    // read duplocale body
+#ifdef DEBUG_PATCH_DUPLOCALE
+    std::fprintf(stderr, "duplocale = %p\n", duplocale);
+#endif
+    byte* duplocale_r;
+    {
+      static byte duplocale_data[] = {
+        0x83, 0xEC, 0x1C,
+        0x64, 0xA1, 0x04, 0x00, 0x00, 0x00,
+        0x8B, 0x54, 0x24, 0x20,
+        0x2D, 0xE4, 0x2A, 0x00, 0x00,
+        0x89, 0x04, 0x24,
+        0x89, 0x54, 0x24, 0x04,
+        0xE8,
+      };
+
+      scoped_virtual_protect _(duplocale, sizeof(duplocale_data) + 4, PAGE_EXECUTE_READ);
+
+      uint32_t* poffset;
+      if (uint32_t* poffset = skip_checked_prefix(duplocale, duplocale_data)) {
+        duplocale_r = (byte*) (uintptr_t) ((uint32_t) poffset + 4 + *poffset);
+      } else
+        return false;
+    }
+
+    // read duplocale_r body
+#ifdef DEBUG_PATCH_DUPLOCALE
+    std::fprintf(stderr, "duplocale_r = %p\n", duplocale_r);
+#endif
+    {
+      static byte duplocale_r_data[] = {
+        0x55,
+        0x57,
+        0x56,
+        0x53,
+        0x81, 0xec, 0x7c, 0x01, 0x00, 0x00,
+        0x8b, 0x9c, 0x24, 0x94, 0x01, 0x00, 0x00,
+        0x83, 0xfb, 0xff,
+        0x0f, 0x84, 0xe6, 0x00, 0x00, 0x00,
+        0x81, 0xfb, 0x60, 0xCC, 0xCC, 0xCC,
+        0x0f, 0x84, 0xea, 0x00, 0x00, 0x00,
+        0xb9, 0x58, 0x00, 0x00, 0x00,
+        0x8d, 0x7c, 0x24, 0x10,
+        0x89, 0xde,
+        0x8d, 0x6c, 0x24, 0x30,
+        0xf3, 0xa5,
+        0x8d, 0xbc, 0x24, 0x40, 0x01, 0x00, 0x00,
+        0xbe, 0x01, 0x00, 0x00, 0x00,
+        0x8b, 0x94, 0xf3, 0x2c, 0x01, 0x00, 0x00,
+        0x85, 0xd2,
+        0x74, 0x25,
+        0x8d, 0x44, 0x24, 0x10,
+        0xc7, 0x07, 0x00, 0x00, 0x00, 0x00,
+        0xc7, 0x47, 0x04, 0x00, 0x00, 0x00, 0x00,
+        0x89, 0x6c, 0x24, 0x08,
+        0x89, 0x74, 0x24, 0x04,
+        0x89, 0x04, 0x24,
+        0xe8,
+      };
+
+      scoped_virtual_protect _(duplocale_r, sizeof(duplocale_r_data) + 4, PAGE_EXECUTE_READWRITE);
+
+      if (uint32_t* poffset = skip_checked_prefix(duplocale_r, duplocale_r_data)) {
+        original_loadlocale = (loadlocale_t*) (uintptr_t) ((uint32_t) poffset + 4 + *poffset);
+        *poffset = (uint32_t) (uintptr_t) &my_loadlocale - ((uint32_t) poffset + 4);
+#ifdef DEBUG_PATCH_DUPLOCALE
+        std::fprintf(stderr, "loadlocale replaced at %p\n", poffset);
+#endif
+      } else
+        return false;
+    }
+  }
+
 }
 
 #ifdef USE_AS_DLL
@@ -707,6 +857,7 @@ extern "C" BOOL WINAPI DllMain(HMODULE hinstDLL, DWORD fdwReason, LPVOID lpvRese
       patch_libstdcxx_locale_impl1::patch(patcher, hinstDLL);
       patch_libstdcxx_locale_impl2::patch(patcher, hinstDLL);
       patch_libstdcxx_locale_impl3::patch(patcher, hinstDLL);
+      patch_duplocale();
     }
     break;
   }
@@ -721,6 +872,7 @@ int patch_libstdcxx_locale() {
   patch_libstdcxx_locale_impl1::patch(patcher);
   patch_libstdcxx_locale_impl2::patch(patcher);
   patch_libstdcxx_locale_impl3::patch(patcher);
+  patch_duplocale();
   return 0;
 }
 

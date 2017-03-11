@@ -22,7 +22,8 @@
     未初期化の部分を 0 などで上書きする様に修正を行わなければならない。
     これにより一応 (文字コード変換だけは) 動く cygstdc++-6.dll を作成することが可能である。
 
-    これについては後でビルド用のスクリプトでも作ると良い。
+    更に文字コードの変換を利用するには codecvt の方も修正する必要がある。
+    codecvt::do_{in,out,encoding,max_length,length} を上書きする。
 
   * hot patching をするという事
 
@@ -41,19 +42,6 @@
 
 
 2017-03-10
-
-* 直ったかと思ったら直っていなかった → codecvt も上書きする必要がある。
-
-  今まで見た目上動いている様に見えたのは std::setlocale していたからだった。
-  実は Cygwin 上では std::setlocale するだけで動く様になるのであった。
-  そして std::setlocale をせずに実行すると std::ios_base::failure
-  "basic_filebuf::_M_convert_to_external conversion error" というエラーが発生するのであった。
-
-  impl0 に codecvt を使用した処理を実装して動作を確認してみる事にする。
-  何の変換も為されずに出力される様である。
-  そもそも実装が間違っていないか心配なので linux でも実行してみたが期待通り動く。
-  (但し、cp932 や shift_jis, shift-jis は認識されない様である。)
-  →codecvt を上書きしてみるとちゃんと動くようになった。
 
 * クラッシュする → cygwin1.dll の duplocale が壊れているのが理由の様だ。
 
@@ -85,9 +73,314 @@
 After obtaining a locale object by `duplocale' and passing it to `uselocale', MB_CUR_MAX (which is expanded
 
 
+
 ------------------------------------------------------------------------------
   Done
 ------------------------------------------------------------------------------
+
+2017-03-11
+
+* cygwin のソースを調べてみる。
+
+  cygwin の setup.exe でソースを選択してインストールする。
+  /usr/src/cygwin-* 以下に tarball が出て来る。
+  展開する。どうやら libstdc++-v3 にあった newlib というのは cygwin が元にしているライブラリ?の様だ。
+  というか Wikipedia を見ると cygnus で作成したと書かれているので、これはつまり cygwin のライブラリという事だ。
+
+  newlib/libc/locale/locale.c:981: __locale_mb_cur_max はここ。
+  newlib/libc/locale/setlocale.c:269: __get_current_ctype_locale はここ。
+
+  うーん。#ifdef が沢山あるので実際にどの実装が使われるのか分からない。
+  取り敢えずコンパイルする事にしよう。
+
+  $ CFLAGS='-O2 -g' CXXFLAGS='-O2 -g' ./configure --prefix=$HOME/opt/cygwin1-2.7.0
+
+  % newlib-cygwin ディレクトリで ./configure して make すると途中でエラーが出て止まった。
+  % それでも dll ができているかもしれないと newlib ディレクトリに入ってみたが
+  % Makefile ができていなかった。代わりに configure が置いてある。
+  % 改めて newlib ディレクトリの中で ./configure && make する。
+  % 
+  % 同じエラーでコンパイルが通らない。newlib/makedoc/doc/Makefile を修正する。
+  % 
+  % diff --git a/Makefile b/Makefile
+  % index b761a66..c548999 100644
+  % --- a/Makefile
+  % +++ b/Makefile
+  % @@ -182,7 +182,7 @@ top_srcdir = .
+  %  AUTOMAKE_OPTIONS = cygnus
+  % 
+  %  # We can't use noinst_PROGRAMS, because automake will add $(EXEEXT).
+  % -noinst_DATA = makedoc
+  % +noinst_DATA = makedoc$(EXEEXT_FOR_BUILD)
+  %  MKDOC = makedoc$(EXEEXT_FOR_BUILD)
+  %  ACLOCAL_AMFLAGS = -I .. -I ../..
+  %  CONFIG_STATUS_DEPENDENCIES = $(newlib_basedir)/configure.host
+  % 
+  % newlib サブディレクトリでできたのは libc.a libm.a だけであった。
+
+  やはり全体で make しなければならない様だ。全体で改めて make して見ると…。
+  どうやら newlib サブディレクトリに Makefile ができていないと思ったら、
+  実際にビルドに使用しているディレクトリが別であるというだけの事であった。
+  改めて i686-pc-cygwin/newlib/doc/Makefile を修正して全体の make の続きをする。
+
+  Note: cygwin のビルド中に c++wrap やら ccwrap やらが動いている。
+    どうやら cygwin のビルドには c++ も必要な様である。
+    CXXFLAGS も指定しておいてよかった…。
+
+  cygwin0.dll が作られてそれから new-cygwin1.dll が作られる。
+  (cygwin1.dll の 1 というのは version 番号ではなかったのか。)
+  さて目的の DLL は new-cygwin1.dll だと考えてよいのだろうか。
+  depends で見ると duplocale もちゃんと公開されている。
+  プロパティを開くと元のファイル名 cygwin1.dll と書かれているのでこれで良いのだろう。
+
+  配置してみる。gdb で実行してみる。しかし __locale_mb_cur_max に入る事ができない。
+  もしかして既にロードしている dll や cygwin1.dll に関しては特別扱いで、
+  新しくロードされないという様な事があったりするのだろうか。
+  其処で cygwin1.dll の中身を別の dll に切り替えて実行してみるとエラーになる。
+  という事は少なくともローカルにある cygwin1.dll をロードはする様だ。
+  問題は、もしかするとローカルにある cygwin1.dll をロードしたとしても、
+  cygwin1.dll の dllmain の中で既存の cygwin1 インスタンスに切り替える等の処理を行っていないか
+  という様な事である。そうだとすると面倒くさい。結局 cygwin に対する上書きを試行するしかないのだろうか。
+
+  うーん。そうするとどの様な config でコンパイルされているのかを明らかにしなければ読めない。
+  という訳で newlib/libc/locale/locale.c に __choke__ を加えてどの様に書き換わるかを調べる。
+  と思ったらコンパイルが通らなくなっている何故だろう。
+  問題は /usr/include/cygwin/config.h で発生している。
+  /usr/include/cygwin/config.h を覗いてみると #define __HAVE_LOCALE_INFO__ 1 が定義されている。
+  わざわざ実行しなくても /usr/include/cygwin/config.h を見れば良いという事なのだろう。
+  という訳で取り敢えず ifdef __HAVE_LOCALE_INFO__ なのだという事にして進むことにする。
+
+  __locale_mb_cur_max からは __get_current_ctype_locale が呼び出される。
+  __get_current_ctype_locale は setlocale.h にあって
+  __get_current_locale ()->lc_cat[LC_CTYPE].ptr が参照されている。
+  lc_cat は __locale_t の配列メンバである。
+  duplocale の中では一旦 __locale_t をまるっとコピーした後に、
+  lc_cat に NULL を代入して元のオブジェクトから改めてディープコピーしている様に見える。
+  各要素をディープコピーしているのは __loadlocale である。
+  __loadlocale が定義されているのは locale.c である。
+  早速問題を見つけたような気がする…。
+
+  ```cpp:duplocale.c:69
+  if (!__loadlocale (&tmp_locale, i, tmp_locale.categories[i]))
+    goto error;
+  ```
+
+  ```cpp:locale.c:502 付近
+  char *
+  __loadlocale (struct __locale_t *loc, int category, const char *new_locale)
+  {
+    /* 中略 */
+    if (!strcmp (new_locale, loc->categories[category]))
+      return loc->categories[category];
+  ```
+
+  この様な構成になっている。
+  __loadlocale では最初のチェックで既に値が入っている場合には処理をスキップする。
+  何か、この呼び出し方だと常に __loadlocale はスキップして実際の処理に入らない気がする。
+  本当か再度確認する。渡している引数を strcmp に入れてみると、
+
+    strcmp(tmp_locale.categories[i], (&tmp_locale)->categories[i])
+
+  となる。これは明らかに同じものを比較しているのだから当然 0 になる。そしてスキップする。
+  つまり、この __loadlocale が呼び出される様に修正しなければならないのである。
+
+  duplocale の実装を置き換える事は可能だろうか。
+
+  - さて duplocale の実装で _REENT という物が使われている。
+    これは何かと思ったら calloc や free の引数に渡されている。
+    スレッドセーフか何かを担保する為の仕組みだろうか。
+    調べてみると cygwin では malloc/free もスレッドセーフとなっている様なので
+    (https://cygwin.com/ml/cygwin/2011-02/msg00502.html)
+    まあこれについては気にせずに普通の calloc/free を使う様にしてしまって問題ないだろう。
+
+  - また __loadlocale は外部から呼び出す事のできる関数になっているだろうか。
+    どうやら公開されていない。これだと面倒だ。
+
+    a __loadlocale も含めて新しく実装する。
+
+    b __loadlocale のアドレスを取得する方法を考える。
+      これは無理そうである。
+      と思ったが c の方法を用いれば読み取る事自体は可能なのではないかという気がする。
+
+    c duplocale の __loadlocale 呼び出し部分を書き換える。
+
+      呼び出し部分の offset が分かっていればそんなに難しくない。
+      と思ったがこれは公開されている関数 duplocale から考えると
+      二段の呼び出しの中に入っている。面倒だ。
+      呼び出し命令のオフセットから読み出すとしても、
+      実際の cygwin1.dll と手元のコンパイルした cygwin1.dll で同じか分からないし、
+      また cygwin1.dll の version が上がればまたずれるかもしれない。
+      と思ったら実際の cygwin1.dll は strip されていなくて debug 情報が埋め込まれている様だ。
+      実際に duplocale や _duplocale_r がどうなっているのかを覗いてみる事ができる。
+      確認してみたが、どうやら手許ではバイナリレベルで同じようだ。
+      アドレス自体は異なるので間違って同じバイナリを見ているという事はない。
+      以下が実際の比較。左側のバイト列が自前でコンパイルした物。
+      右側のバイト列が /bin/cygwin1.dll にあった物。
+
+      61144a20 <_duplocale_r>:
+      61144a20: 55                    55                      push   ebp
+      61144a21: 57                    57                      push   edi
+      61144a22: 56                    56                      push   esi
+      61144a23: 53                    53                      push   ebx
+      61144a24: 81 ec 7c 01 00 00     81 ec 7c 01 00 00       sub    esp,0x17c
+      61144a2a: 8b 9c 24 94 01 00 00  8b 9c 24 94 01 00 00    mov    ebx,DWORD PTR [esp+0x194]
+      61144a31: 83 fb ff              83 fb ff                cmp    ebx,0xffffffff
+      61144a34: 0f 84 e6 00 00 00     0f 84 e6 00 00 00       je     61144b20 <_duplocale_r+0x100>
+      61144a3a: 81 fb 60 42 21 61     81 fb 60 4f 21 61       cmp    ebx,0x61214f60
+      61144a40: 0f 84 ea 00 00 00     0f 84 ea 00 00 00       je     61144b30 <_duplocale_r+0x110>
+      61144a46: b9 58 00 00 00        b9 58 00 00 00          mov    ecx,0x58
+      61144a4b: 8d 7c 24 10           8d 7c 24 10             lea    edi,[esp+0x10]
+      61144a4f: 89 de                 89 de                   mov    esi,ebx
+      61144a51: 8d 6c 24 30           8d 6c 24 30             lea    ebp,[esp+0x30]
+      61144a55: f3 a5                 f3 a5                   rep movs DWORD PTR es:[edi],DWORD PTR ds:[esi]
+      61144a57: 8d bc 24 40 01 00 00  8d bc 24 40 01 00 00    lea    edi,[esp+0x140]
+      61144a5e: be 01 00 00 00        be 01 00 00 00          mov    esi,0x1
+      61144a63: 8b 94 f3 2c 01 00 00  8b 94 f3 2c 01 00 00    mov    edx,DWORD PTR [ebx+esi*8+0x12c]
+      61144a6a: 85 d2                 85 d2                   test   edx,edx
+      61144a6c: 74 25                 74 25                   je     61144a93 <_duplocale_r+0x73>
+      61144a6e: 8d 44 24 10           8d 44 24 10             lea    eax,[esp+0x10]
+      61144a72: c7 07 00 00 00 00     c7 07 00 00 00 00       mov    DWORD PTR [edi],0x0
+      61144a78: c7 47 04 00 00 00 00  c7 47 04 00 00 00 00    mov    DWORD PTR [edi+0x4],0x0
+      61144a7f: 89 6c 24 08           89 6c 24 08             mov    DWORD PTR [esp+0x8],ebp
+      61144a83: 89 74 24 04           89 74 24 04             mov    DWORD PTR [esp+0x4],esi
+      61144a87: 89 04 24              89 04 24                mov    DWORD PTR [esp],eax
+      61144a8a: e8 21 ad 00 00        e8 21 ad 00 00          call   6114f7b0 <__loadlocale>
+      61144a8f: 85 c0                 85 c0                   test   eax,eax
+      61144a91: 74 3e                 74 3e                   je     61144ad1 <_duplocale_r+0xb1>
+      61144a93: 83 c6 01              83 c6 01                add    esi,0x1
+      61144a96: 83 c7 08              83 c7 08                add    edi,0x8
+      61144a99: 83 c5 20              83 c5 20                add    ebp,0x20
+      61144a9c: 83 fe 07              83 fe 07                cmp    esi,0x7
+      61144a9f: 75 c2                 75 c2                   jne    61144a63 <_duplocale_r+0x43>
+      61144aa1: c7 44 24 04 60 01 00  c7 44 24 04 60 01 00    mov    DWORD PTR [esp+0x4],0x160
+      61144aa8: 00                    00
+      61144aa9: c7 04 24 01 00 00 00  c7 04 24 01 00 00 00    mov    DWORD PTR [esp],0x1
+      61144ab0: e8 eb 8b f3 ff        e8 bb 8b f3 ff          call   6107d670 <calloc>
+      61144ab5: 85 c0                 85 c0                   test   eax,eax
+      61144ab7: 74 18                 74 18                   je     61144ad1 <_duplocale_r+0xb1>
+      61144ab9: b9 58 00 00 00        b9 58 00 00 00          mov    ecx,0x58
+      61144abe: 89 c7                 89 c7                   mov    edi,eax
+      61144ac0: 8d 74 24 10           8d 74 24 10             lea    esi,[esp+0x10]
+      61144ac4: f3 a5                 f3 a5                   rep movs DWORD PTR es:[edi],DWORD PTR ds:[esi]
+      61144ac6: 81 c4 7c 01 00 00     81 c4 7c 01 00 00       add    esp,0x17c
+      61144acc: 5b                    5b                      pop    ebx
+      61144acd: 5e                    5e                      pop    esi
+      61144ace: 5f                    5f                      pop    edi
+      61144acf: 5d                    5d                      pop    ebp
+      61144ad0: c3                    c3                      ret
+      61144ad1: 8d 5c f4 10           8d 5c f4 10             lea    ebx,[esp+esi*8+0x10]
+      61144ad5: 8d 74 24 18           8d 74 24 18             lea    esi,[esp+0x18]
+      61144ad9: eb 2e                 eb 2e                   jmp    61144b09 <_duplocale_r+0xe9>
+      61144adb: 90                    90                      nop
+      61144adc: 8d 74 26 00           8d 74 26 00             lea    esi,[esi+eiz*1+0x0]
+      61144ae0: 8b 83 24 01 00 00     8b 83 24 01 00 00       mov    eax,DWORD PTR [ebx+0x124]
+      61144ae6: 85 c0                 85 c0                   test   eax,eax
+      61144ae8: 74 1c                 74 1c                   je     61144b06 <_duplocale_r+0xe6>
+      61144aea: 8b 83 20 01 00 00     8b 83 20 01 00 00       mov    eax,DWORD PTR [ebx+0x120]
+      61144af0: 89 04 24              89 04 24                mov    DWORD PTR [esp],eax
+      61144af3: e8 08 8a f3 ff        e8 d8 89 f3 ff          call   6107d4d0 <free>
+      61144af8: 8b 83 24 01 00 00     8b 83 24 01 00 00       mov    eax,DWORD PTR [ebx+0x124]
+      61144afe: 89 04 24              89 04 24                mov    DWORD PTR [esp],eax
+      61144b01: e8 fa 89 f3 ff        e8 ca 89 f3 ff          call   6107d4d0 <free>
+      61144b06: 83 eb 08              83 eb 08                sub    ebx,0x8
+      61144b09: 39 f3                 39 f3                   cmp    ebx,esi
+      61144b0b: 75 d3                 75 d3                   jne    61144ae0 <_duplocale_r+0xc0>
+      61144b0d: 81 c4 7c 01 00 00     81 c4 7c 01 00 00       add    esp,0x17c
+      61144b13: 31 c0                 31 c0                   xor    eax,eax
+      61144b15: 5b                    5b                      pop    ebx
+      61144b16: 5e                    5e                      pop    esi
+      61144b17: 5f                    5f                      pop    edi
+      61144b18: 5d                    5d                      pop    ebp
+      61144b19: c3                    c3                      ret
+      61144b1a: 8d b6 00 00 00 00     8d b6 00 00 00 00       lea    esi,[esi+0x0]
+      61144b20: bb 20 0e 1c 61        bb 20 0e 1c 61          mov    ebx,0x611c0e20
+      61144b25: e9 1c ff ff ff        e9 1c ff ff ff          jmp    61144a46 <_duplocale_r+0x26>
+      61144b2a: 8d b6 00 00 00 00     8d b6 00 00 00 00       lea    esi,[esi+0x0]
+      61144b30: b8 60 42 21 61        b8 60 4f 21 61          mov    eax,0x61214f60
+      61144b35: eb 8f                 eb 8f                   jmp    61144ac6 <_duplocale_r+0xa6>
+      61144b37: 89 f6                 89 f6                   mov    esi,esi
+      61144b39: 8d bc 27 00 00 00 00  8d bc 27 00 00 00 00    lea    edi,[edi+eiz*1+0x0]
+
+      61144b40 <duplocale>:
+      61144b40: 83 ec 1c              83 ec 1c                sub    esp,0x1c
+      61144b43: 64 a1 04 00 00 00     64 a1 04 00 00 00       mov    eax,fs:0x4
+      61144b49: 8b 54 24 20           8b 54 24 20             mov    edx,DWORD PTR [esp+0x20]
+      61144b4d: 2d e4 2a 00 00        2d e4 2a 00 00          sub    eax,0x2ae4
+      61144b52: 89 04 24              89 04 24                mov    DWORD PTR [esp],eax
+      61144b55: 89 54 24 04           89 54 24 04             mov    DWORD PTR [esp+0x4],edx
+      61144b59: e8 c2 fe ff ff        e8 c2 fe ff ff          call   61144a20 <_duplocale_r>
+      61144b5e: 83 c4 1c              83 c4 1c                add    esp,0x1c
+      61144b61: c3                    c3                      ret
+      61144b62: 90                    90                      nop
+      61144b63: 90                    90                      nop
+      61144b64: 90                    90                      nop
+      61144b65: 90                    90                      nop
+      61144b66: 90                    90                      nop
+      61144b67: 90                    90                      nop
+      61144b68: 90                    90                      nop
+      61144b69: 90                    90                      nop
+      61144b6a: 90                    90                      nop
+      61144b6b: 90                    90                      nop
+      61144b6c: 90                    90                      nop
+      61144b6d: 90                    90                      nop
+      61144b6e: 90                    90                      nop
+      61144b6f: 90                    90                      nop
+
+  うーん。__loadlocale ではなくてこちらで用意した関数を呼び出す様に書き換えるのが楽な気がする。
+
+  さて実際に duplocale の位置を GetProcAddress で取得して観察してみると…。
+  上で取得した内容と異なる。"sub esp, 0x1c" 等の命令がロード時に変化するとは考えにくい…。
+  結果として 68 40 4b 14 になっている。
+  メモリのプロテクトの所為で変な値が読み出されているのかもしれないと思って、
+  ちゃんと VirtualProtect で READWRITE をつけてから読み取ってみたがやはり値は変わらない。
+  もっとたくさん読み取ってみると周期的になっている。これは IAT だ…。
+
+  調べてみるとどうやら GetProcAddress で IAT のアドレスが取得できる場合と、
+  実体のアドレスが取得できる場合の二種類がある様だ。ロードの仕方と関係している?
+
+  % 一応中身について ... 68 40 4b 14 61 e9 c1 f3 ff ff
+  % 数字を見た感じ 1-5 バイト目の 61144b40 という値が怪しい。
+  % また 5-10 バイト目は jmp fffff3c1 に見える。
+  % 610dddee+10 からのオフセットと考えるとこれのジャンプ先は 610dd1b9 である。これは何だろう。
+  % しかし改めて dll の duplocale の位置と比較して考えて見るに、
+  % 1-5 バイト目がジャンプ先を表しているという事で間違いない。
+  % 調べると 68 というのは push の様である。
+  % もしかすると 610dd1b9 というのは何かジャンプを実行する関数なのだろうか。
+  % 次の項目も見てみる事にする: 68 90 54 14 61 e9 b7 f3 ff ff
+  % これは最終的に $((0x610dddee+20+0xfffff3b7)) = 610dd1b9 に jmp する。
+  % 成る程同じ値である。
+
+  まとめると IAT の項目は以下の 10 byte である。
+
+  push address ; address (32bit即値) は関数の絶対位置である。
+  jmp  offset  ; offset (32bit即値) は IAT 前方にあるジャンプ用のコードに跳ぶ。
+               ; そこで、pop した値の先に更にジャンプすると思われる。
+
+  なので 1-4 bytes 目を読み取る様にすれば良い。
+
+2017-03-10
+
+* libstdc++-v3 修正スクリプト
+
+  > libstdc++-v3
+  >   これについては後でビルド用のスクリプトでも作ると良い
+
+  →作った
+
+* 直ったかと思ったら直っていなかった → codecvt も上書きする必要がある。
+
+  今まで見た目上動いている様に見えたのは std::setlocale していたからだった。
+  実は Cygwin 上では std::setlocale するだけで動く様になるのであった。
+  そして std::setlocale をせずに実行すると std::ios_base::failure
+  "basic_filebuf::_M_convert_to_external conversion error" というエラーが発生するのであった。
+
+  impl0 に codecvt を使用した処理を実装して動作を確認してみる事にする。
+  何の変換も為されずに出力される様である。
+  そもそも実装が間違っていないか心配なので linux でも実行してみたが期待通り動く。
+  (但し、cp932 や shift_jis, shift-jis は認識されない様である。)
+  →codecvt を上書きしてみるとちゃんと動くようになった。
+
+2017-03-09
 
 * C++ で std::locale("") すると死んでしまう件について。
 
