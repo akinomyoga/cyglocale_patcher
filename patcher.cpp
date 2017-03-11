@@ -3,6 +3,42 @@
  * *概要
  *
  * Cygwin で `std::locale("")` や `std::locale("ja_JP.UTF-8")` をする。
+ * このコードには GPLv3 をランタイムライブラリ例外つきで適用する。
+ *
+ * ----------------------------------------------------------------------------
+ * This program is provided under GPLv3 with the runtime library excetpion.
+ *
+ * Copyright (C) 2017  akinomyoga (K Murase) <myoga.murase@gmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * For the runtime library exception, see the following documents:
+ * <https://www.gnu.org/licenses/gcc-exception-3.1-faq.en.html>.
+ * ----------------------------------------------------------------------------
+ *
+ * *使い方 (静的リンクして使う場合)
+ *
+ * この方法を採る場合は `USE_LOCOBJ_COUNT` は定義されていなければならない。
+ * 普通にコンパイルして .o ファイルを得る。
+ * main のプログラムでは以下のようにする。
+ * &pre(!cpp,title=program.cpp){
+ * int main() {
+ *   int patch_libstdcxx_locale();
+ *   patch_libstdcxx_locale(); // 一番最初に呼び出す。
+ *   // 中身
+ * }
+ * }
  *
  * *使い方 (DLL にして使う場合)
  *
@@ -27,19 +63,6 @@
  * コンパイル時に `-Wl,-rpath,場所` を指定するか、
  * 環境変数 `LD_LIBRARY_PATH=場所:...` を指定するか、
  * 実行ファイルと同じディレクトリに .dll を置く。
- *
- * *使い方 (静的リンクして使う場合)
- *
- * この方法を取る場合は `USE_LOCOBJ_COUNT` は定義されていなければならない。
- * 普通にコンパイルして .o ファイルを得る。
- * main のプログラムでは以下のようにする。
- * &pre(!cpp,title=program.cpp){
- * int main() {
- *   int patch_libstdcxx_locale();
- *   patch_libstdcxx_locale(); // 一番最初に呼び出す。
- *   // 中身
- * }
- * }
  *
  * *経緯
  *
@@ -529,14 +552,26 @@ namespace {
 #endif
   }
 
+  struct scoped_virtual_protect {
+    LPVOID addr;
+    DWORD size;
+    DWORD old_protect;
+    scoped_virtual_protect(void* addr, DWORD size, DWORD protect): addr(addr), size(size) {
+      ::VirtualProtect((LPVOID) addr, size, protect, &old_protect);
+    }
+    ~scoped_virtual_protect() {
+      ::VirtualProtect((LPVOID) addr, size, old_protect, &old_protect);
+    }
+  };
+
   bool patch_function(void* ptarget, void* preplace) {
     bool result = false;
 
     // 16 bytes で align されているっぽいので仮定してしまう。
     if (ptarget && (uintptr_t) ptarget % 8 == 0) {
-      DWORD old_protect;
-      ::VirtualProtect((LPVOID) ptarget, 8, PAGE_EXECUTE_READWRITE, &old_protect);
-      int32_t const distance32 = (int32_t) ((intptr_t) preplace - (intptr_t) ptarget - 5);
+      scoped_virtual_protect _(ptarget, 8, PAGE_EXECUTE_READWRITE);
+
+      int32_t const distance32 = (int32_t) ((intptr_t) preplace - ((intptr_t) ptarget + 5));
       if ((intptr_t) preplace == ((intptr_t) ptarget + 5) + distance32) {
         uint64_t* const ptarget64 = (uint64_t*) ptarget;
         union { uint64_t intval; unsigned char data[8]; } body = { *ptarget64 };
@@ -545,16 +580,14 @@ namespace {
         atomic_write64(ptarget64, body.intval);
         result = true;
       }
-      ::VirtualProtect((LPVOID) ptarget, 8, old_protect, &old_protect);
     }
-    // else std::fprintf(stderr, "tgt=%p rep=%p\n", ptarget, preplace);
 
     return result;
   }
 
   class dll_patcher {
     int patch_count;
-    const char* dllName;
+    const char* const dllName;
     HMODULE const targetDll;
 
   public:
@@ -698,18 +731,6 @@ namespace {
       // ※残念ながらコンストラクタへのポインタは取得できない。
       // ctype<char>::ctype(__c_locale, const mask* table, bool del, size_t refs)
       // ctype<char>::ctype(const mask* table, bool del, size_t refs)
-    }
-  };
-
-  struct scoped_virtual_protect {
-    LPVOID addr;
-    DWORD size;
-    DWORD old_protect;
-    scoped_virtual_protect(void* addr, DWORD size, DWORD protect): addr(addr), size(size) {
-      ::VirtualProtect((LPVOID) addr, size, protect, &old_protect);
-    }
-    ~scoped_virtual_protect() {
-      ::VirtualProtect((LPVOID) addr, size, old_protect, &old_protect);
     }
   };
 
