@@ -1,5 +1,7 @@
-# cyglocale_patcher
+# cyglocale_patcher.cpp
 Cygwin で一緒にリンクするだけで std::locale(locale_name) 及び std::codecvt に対応する (Cygwin x86 2.7.0 用)
+
+ライセンスは GPLv3 (ランタイムライブラリ例外適用) です。
 
 ##使い方
 普通に動かそうとしても Cygwin では動かないプログラムでも…
