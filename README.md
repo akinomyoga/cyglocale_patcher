@@ -1,5 +1,5 @@
 # cyglocale_patcher.cpp
-Cygwin で一緒にリンクするだけで std::locale(locale_name) 及び std::codecvt に対応する (Cygwin x86 2.7.0 用)
+Cygwin で一緒にリンクするだけで std::locale(locale_name) 及び std::codecvt に対応し duplocale のバグも修正する (Cygwin x86 2.7.0 用)
 
 ライセンスは GPLv3 (ランタイムライブラリ例外適用) です。
 
@@ -36,3 +36,11 @@ Aborted (コアダンプ)
 ����������3 # ← sjis
 ����������4 # ← ujis
 ```
+
+##仕組み (dirty hack)
+
+基本、メモリ上にロードされた DLL のイメージにある関数を書き換える。
+- cygstdc++-6.cpp: JMP 命令による API hooking (hot patching) で 10-14 個の関数を置換。
+- cygwin1.dll: duplocale 内の "call __loadlocale" 命令の行き先を書き換えて修正。
+
+クラッシュする危険性は 0 ではない。と思う。
