@@ -13,7 +13,7 @@ sample1.exe: sample1.o
 	g++ -g -o $@ $^
 
 all: cyglocale_patcher.dll
-cyglocale_patcher.dll: patcher.cpp
+cyglocale_patcher.dll: cyglocale_patcher.cpp
 	g++ -O2 -s -shared -D USE_AS_DLL -o $@ $<
 
 all: sample1d.exe
@@ -25,5 +25,5 @@ sample1d.exe: sample1d.o cyglocale_patcher.dll
 all: sample1s.exe
 sample1s.o: sample1.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -D USE_PATCH -c -o $@ $<
-sample1s.exe: sample1s.o patcher.o
+sample1s.exe: sample1s.o cyglocale_patcher.o
 	$(CXX) -g -o $@ $^
