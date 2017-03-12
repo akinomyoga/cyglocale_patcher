@@ -4,9 +4,11 @@
  *
  * Cygwin で `std::locale("")` や `std::locale("ja_JP.UTF-8")` をする。
  * このコードには GPLv3 をランタイムライブラリ例外つきで適用する。
+ * プログラムの一部に libstdc++-v3 に含まれるコードを改変して使用している。
  *
  * ----------------------------------------------------------------------------
  * This program is provided under GPLv3 with the runtime library excetpion.
+ * A part of program is taken from libstdc++-v3.
  *
  * Copyright (C) 2017  akinomyoga (K Murase) <myoga.murase@gmail.com>
  *
