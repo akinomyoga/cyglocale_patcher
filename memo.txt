@@ -1,6 +1,4 @@
 
-
-
 まとめ
 
 * C++ で std::locale("") すると死んでしまう
@@ -11,7 +9,7 @@
   実際に Cygwin 上で ./configure に --enable-clocale=gnu 等の値を指定しても、
   結局 configure のテストに失敗するので最終的には generic が指定されて変わらない。
 
-  * libstdc++-v3 を修正してビルドするという方法
+  * libstdc++-v3 を修正して cygstdc++-6.dll をビルドして使うという方法
 
     実のところ Cygwin では C 言語レベルの locale の機能は揃っているので、
     locale は generic ではなくて gnu でも良いはずである。
@@ -25,23 +23,128 @@
     更に文字コードの変換を利用するには codecvt の方も修正する必要がある。
     codecvt::do_{in,out,encoding,max_length,length} を上書きする。
 
-  * hot patching をするという事
+  * cygwin1.dll の duplocale のバグを修正するのこと
 
-    libstdc++-v3 に対する修正を元にして hot patch を作成する。
-    しかし自前でビルドした cygstdc++-6.dll に対する patching はうまく行くが、
-    Cygwin についてくる cygstdc++-6.dll に対する patching はうまく行かない。
-    何回か std::locale(...) すると seg fault になる。
+    duplocale で作られる locale が壊れている。
+    newlocale/duplocale/uselocale の類の機能は cygwin 2.6.0 (2016/08) に新しく実装された様だ。
+    新しい機能なのでまだ色々のバグが残っていると書かれている。
 
-    自前でビルドした cygstdc++-6.dll と Cygwin についてくる cygstdc++-6.dll は
-    公開されているエントリーポイントが異なる様である。それを無視しても segfault になる。
-    不思議なのは _ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc が Cygwin 付属の
-    cygstdc++-6.dll にちゃんと含まれている様に見えるのに実際に GetProcAddress しようとすると
-    失敗するという事である…。もしかすると何か変な dll を読み込んでいるだろうか。
+    実際に cygwin のソースコードを見て問題を見つけた。
+    これは後で bug report を送る事にする。
 
-    うーん仕方がないのでそれまでに生成したオブジェクトのアドレスを全て記録する事にするか。
+  * 動的に書き換えるという事
+
+    自分でビルドした cygstdc++-6.dll や cygwin1.dll を一緒に配布するというのも微妙だ。
+    既存の cygstdc++-6.dll, cygwin1.dll で動かしても動くようにしたい。
+    その為には動的に DLL の内容をメモリ上で書き換えてしまえば良い。
+
+    幸い問題の関数は全て DLL の中にあるので GetProcAddress を用いて
+    メモリ上の位置が簡単に特定できる。
+    関数実体の中身を JMP に書き換えて自分の実装した関数に転送すれば良い。
 
 
-2017-03-10
+
+------------------------------------------------------------------------------
+  Done
+------------------------------------------------------------------------------
+
+2017-03-11
+
+* cygwin にバグレポートを書く
+
+  https://cygwin.com/problems.html に注意点がずらずら書かれているのでこれを読まなければならない。
+  appropriate mailing list (https://cygwin.com/lists.html) のページを見ると
+  cygwin dll の patch は cygwin-patches に行けという。
+  cygwin-patches は subscribe していないと投稿できないそうなので subscribe する。
+
+  - cygcheck の結果を添付しろと書かれている。実行して中を見てみたが今回の問題とは一切関係がない気がする。
+    メーリングリストを見ても添付している人はいない気がする。無視する。
+    でも cygcheck が使えないのであれば理由を説明しろとまで書かれている。やはり添付したほうが良いのか。
+
+  - ! や ?? は使うなと書かれている。危ない。Thank you! などと書くところであった。
+
+  - できるだけ簡潔に。問題の深刻性やどれだけ頑張ったかの説明は要らない。
+
+  - show how to reproduce the problem
+
+  - "me too" 的な reply はするなと書かれている。1500 もの人が見ている。
+    という事は thank you 的な reply もしてはいけないのだろうか。
+    実際 thank you とか言っている人はいない。やめておこう。
+
+  https://cygwin.com/contrib.html には patch の作り方・送り方が書かれている。
+
+  うーん。newlib libc については https://sourceware.org/newlib/ に行けとも書かれている。
+  そのページに行くと (目が痛い…) 何か良くわからないメーリングリストが紹介されている。
+  contribution のガイドラインは書かれていない気がする。あ、newlib@sourceware.org に送れと書かれている。
+
+  - 過去9ヶ月程遡ってみたが cygwin-patches に投稿されているのは winsup に対する修正のみであった。
+    ここは矢張り newlib@sourceware.org に送った方が良いという事だろうか。
+
+  - winsup/cygwin/how* という名前のファイルで cygwin のテクニックを磨けと書かれている。
+
+  - patch が巨大な場合は the 2-clause BSD license である事を明記しろとかかれている。
+
+  - 変更の有用性・重複がない様に cygwin-developers を subscribe しろと書かれている。
+    簡単な変更の場合にはこれには当たらない気がする。
+
+  - GNU coding style に従えと書かれている。tab 等には注意したい。
+
+  - 実際に現在どのような変更が行われているかを追跡するために cygwin-cvs / newlib-cvs を subscribe しろという。
+
+  - https://sourceware.org/ml/newlib/ で newlib@sourceware.org の内容が見られる。
+    dulocale について検索してみたが今回の問題について触れている人はいない。
+
+  - 何と git commit をすると自動的に newlib-cvs メーリングリストに送信される様だ。やばい。
+    と思ったけれど、これは collaborator の commit だけなのかもしれない。
+
+  - git commit の message はちゃんと書く方が良い様な感じに書かれている。本当か?
+    これは実際に見てみれば分かることである。
+    うーん。CV による commit はシンプルだが時々他の人による詳しい commit message がある。
+    まあ、詳しくするべきなのだろう。先に COMMIT を編集してから送るのが良さそうだ。
+
+  実際に git clone して確かめてみる。先ず patch を適用してみる。適用できた。
+  今度はちゃんと動くかどうかテストしなければならない。
+  winsup/cygwin/how* を確認する。ファイル名を見ると cygwin の仕組みについて書かれている物が多いようだ。
+  how-to-debug-cygwin.txt というファイルだけは確認しておく。まあ、どうしろという事は書かれていない。
+  デバグを容易にするための ./configure オプションについて説明が書かれているだけである。
+  普通に ./configure してやる事にする。
+
+  後は COMMIT を編集するという事である。その為にはテストケースとして C 言語のソースコードを用意する。
+  うーん。コンパイルに shilka というコマンドを要求されている。うーん検索しても良くわからない。
+  setup-x86.exe にも出てこない。と思ったら
+
+    http://cygwin.1069669.n5.nabble.com/Cygwin-TCP-slow-td131118.html
+
+  に cocom パッケージを入れろと書かれている。再起動が面倒くさいのそのまま setup で入れてみる。入った。
+  今度は xmlto が要求されている。これも入れる。と思ったらやられた。texlive fontsextra やら python やら
+  入れようとしてくる。これは大きい。rebase が起こらない事を願う。
+
+  後は生成された cygwin1.dll で問題なくプログラムが動くか確かめる必要がある。
+  何か未だに document を生成しているようだが、生成された new-cygwin1.dll を用いて実行してみた所、
+  期待通りに 6 が終了ステータスになっている事が分かった。OK
+
+  送った。後から気づいたが問題が起こった環境について全く説明するのを忘れていた。
+  cygwin とも書いていないし 32bit と書くのすら忘れた。
+  まあ、重ねてメールを送るという愚は犯さないで置こう。
+
+
+* hot patching をするという事
+
+  libstdc++-v3 に対する修正を元にして hot patch を作成する。
+  しかし自前でビルドした cygstdc++-6.dll に対する patching はうまく行くが、
+  Cygwin についてくる cygstdc++-6.dll に対する patching はうまく行かない。
+  何回か std::locale(...) すると seg fault になる。
+
+  自前でビルドした cygstdc++-6.dll と Cygwin についてくる cygstdc++-6.dll は
+  公開されているエントリーポイントが異なる様である。それを無視しても segfault になる。
+  不思議なのは _ZNSt6locale5facet20_S_lc_ctype_c_localeEPiPKc が Cygwin 付属の
+  cygstdc++-6.dll にちゃんと含まれている様に見えるのに実際に GetProcAddress しようとすると
+  失敗するという事である…。もしかすると何か変な dll を読み込んでいるだろうか。
+
+  うーん仕方がないのでそれまでに生成したオブジェクトのアドレスを全て記録する事にするか。
+
+  これで std::locale 及び std::codecvt は動作する様になったが…
+  wcout.imbue して使おうとするとクラッシュする…(次の項目)。
 
 * クラッシュする → cygwin1.dll の duplocale が壊れているのが理由の様だ。
 
@@ -65,20 +168,6 @@
   cygwin の bug report を検索してみる。
   どうやらロケール周りは 2.6.0 (2016/08) に導入された新しい機能の様だ。
   バグレポートを書こうと思ったが頭がまわらないので後で書く。
-
-下書き
-
-2.7.0: possible Cygwin DLL duplocale bug (W7 and XP)
-
-After obtaining a locale object by `duplocale' and passing it to `uselocale', MB_CUR_MAX (which is expanded
-
-
-
-------------------------------------------------------------------------------
-  Done
-------------------------------------------------------------------------------
-
-2017-03-11
 
 * cygwin のソースを調べてみる。
 
