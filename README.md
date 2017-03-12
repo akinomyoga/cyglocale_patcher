@@ -39,8 +39,9 @@ Aborted (コアダンプ)
 
 ##仕組み (dirty hack)
 
-基本、メモリ上にロードされた DLL のイメージにある関数を書き換える。
-- cygstdc++-6.cpp: JMP 命令による API hooking (hot patching) で 10-14 個の関数を置換。
+基本、メモリ上にロードされた DLL のイメージにある関数を書き換える (hot patching)。
+- cygstdc++-6.dll: JMP 命令による API hooking で 10-14 個の関数を置換。
 - cygwin1.dll: duplocale 内の "call __loadlocale" 命令の行き先を書き換えて修正。
+- ダミーの static 変数を定義することで初期化時に処理を実行。
 
 クラッシュする危険性は 0 ではない。と思う。
