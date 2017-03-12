@@ -732,7 +732,7 @@ namespace {
   typedef char* (loadlocale_t)(locale_t loc, int category, const char* new_locstr);
 
   loadlocale_t* original_loadlocale = 0;
-  char* my_loadlocale(locale_t loc, int category, const char * new_locstr) {
+  char* my_force_loadlocale(locale_t loc, int category, const char * new_locstr) {
 #ifdef DEBUG_PATCH_DUPLOCALE
     std::fprintf(stderr, "__loadlocale %p\n", loc);
 #endif
@@ -852,7 +852,7 @@ namespace {
 
       if (uint32_t* poffset = skip_checked_prefix(duplocale_r, duplocale_r_data)) {
         original_loadlocale = (loadlocale_t*) (uintptr_t) ((uint32_t) poffset + 4 + *poffset);
-        *poffset = (uint32_t) (uintptr_t) &my_loadlocale - ((uint32_t) poffset + 4);
+        *poffset = (uint32_t) (uintptr_t) &my_force_loadlocale - ((uint32_t) poffset + 4);
 #ifdef DEBUG_PATCH_DUPLOCALE
         std::fprintf(stderr, "loadlocale replaced at %p\n", poffset);
 #endif
