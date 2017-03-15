@@ -3,7 +3,7 @@ Cygwin で一緒にリンクするだけで std::locale(locale_name) 及び std:
 
 ライセンスは GPLv3 (ランタイムライブラリ例外適用) です。
 
-##使い方
+## 使い方
 普通に動かそうとしても Cygwin では動かないプログラムでも…
 ```cpp
 // program.cpp (あなたのプログラムの例)
@@ -37,7 +37,7 @@ Aborted (コアダンプ)
 ����������4 # ← ujis
 ```
 
-##仕組み (dirty hack)
+## 仕組み (dirty hack)
 
 基本、メモリ上にロードされた DLL のイメージにある関数を書き換える (hot patching)。
 - cygstdc++-6.dll: JMP 命令による API hooking で 10-14 個の関数を置換。
